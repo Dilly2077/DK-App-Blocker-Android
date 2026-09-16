@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.format.DateFormat
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -44,6 +45,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -117,6 +119,14 @@ private fun AppRoot() {
         }
     }
 
+    BackHandler(enabled = route != Route.MAIN || tab != MainTab.HOME) {
+        when (route) {
+            Route.EDITOR -> route = Route.CREATE_TYPE
+            Route.CREATE_TYPE, Route.STRICT -> route = Route.MAIN
+            Route.MAIN -> tab = MainTab.HOME
+        }
+    }
+
     fun reloadPlans() {
         plans = Prefs.getPlans(context).toList()
     }
@@ -124,10 +134,7 @@ private fun AppRoot() {
     when (route) {
         Route.CREATE_TYPE -> CreateRuleTypeScreen(
             onBack = { route = Route.MAIN },
-            onType = { type ->
-                editing = defaultPlanFor(type)
-                route = Route.EDITOR
-            },
+            onType = { type -> editing = defaultPlanFor(type); route = Route.EDITOR },
             onStrict = { route = Route.STRICT }
         )
         Route.EDITOR -> RuleEditorScreen(
@@ -158,7 +165,11 @@ private fun AppRoot() {
                 if (chosen == MainTab.RULES && strict.enabled && strict.blockRuleChanges) route = Route.STRICT else tab = chosen
             },
             onCreateRule = { route = Route.CREATE_TYPE },
-            onEdit = { plan -> editing = plan; route = Route.EDITOR },
+            onEdit = { plan ->
+                val strict = Prefs.getStrict(context)
+                if (strict.enabled && strict.blockRuleChanges) route = Route.STRICT
+                else { editing = plan; route = Route.EDITOR }
+            },
             onStrict = { route = Route.STRICT },
             onReload = ::reloadPlans
         )
@@ -183,13 +194,9 @@ private fun MainShell(
     onStrict: () -> Unit,
     onReload: () -> Unit
 ) {
-    Scaffold(
-        containerColor = Ink,
-        bottomBar = { MainBottomBar(tab, onTab) }
-    ) { inner ->
+    Scaffold(containerColor = Ink, bottomBar = { MainBottomBar(tab, onTab) }) { inner ->
         Box(
-            Modifier
-                .fillMaxSize()
+            Modifier.fillMaxSize()
                 .background(Brush.verticalGradient(listOf(Ink2, Ink, Color.Black), endY = 900f))
                 .padding(inner)
         ) {
@@ -227,9 +234,9 @@ private fun MainBottomBar(selected: MainTab, onTab: (MainTab) -> Unit) {
 @Composable
 private fun ScreenBackground(content: @Composable BoxScope.() -> Unit) {
     Box(
-        Modifier
-            .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFF03100A), Ink, Color.Black), endY = 820f)),
+        Modifier.fillMaxSize().background(
+            Brush.verticalGradient(listOf(Color(0xFF03100A), Ink, Color.Black), endY = 820f)
+        ),
         content = content
     )
 }
@@ -244,19 +251,17 @@ private fun HomeScreen(
 ) {
     val context = LocalContext.current
     val activePlans = remember(plans, tick / 30_000L) { plans.filter { it.enabled && RuleEngine.isPlanActive(context, it) } }
-    val focusRemaining = (Prefs.focusEnd(context) - tick).coerceAtLeast(0L)
-    val focusActive = focusRemaining > 0
+    val accessReady = remember(tick / 3000L) { isAccessibilityEnabled(context) }
     val greeting = remember {
-        val hour = java.time.LocalTime.now().hour
-        when {
-            hour < 12 -> "Good morning,"
-            hour < 18 -> "Good afternoon,"
+        when (java.time.LocalTime.now().hour) {
+            in 0..11 -> "Good morning,"
+            in 12..17 -> "Good afternoon,"
             else -> "Good evening,"
         }
     }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -264,60 +269,59 @@ private fun HomeScreen(
             Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text(greeting, color = Muted, fontSize = 14.sp)
-                    Spacer(Modifier.height(3.dp))
-                    Text("Stay focused\ntoday 🍃", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 29.sp, lineHeight = 31.sp)
-                    Spacer(Modifier.height(4.dp))
+                    Text("Stay focused\ntoday 🍃", fontWeight = FontWeight.Bold, fontSize = 29.sp, lineHeight = 31.sp)
                     Text("Small steps. Big progress.", color = Muted, fontSize = 13.sp)
                 }
                 Box(Modifier.size(38.dp).background(Color(0xFF174F2E), CircleShape), contentAlignment = Alignment.Center) {
-                    Text("D", color = Color.White, fontWeight = FontWeight.Bold)
+                    Text("D", fontWeight = FontWeight.Bold)
                 }
             }
         }
-
+        if (!accessReady) {
+            item {
+                Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF17140C))) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("🛡️ Finish blocking setup", fontWeight = FontWeight.Bold)
+                        Text("Android Accessibility access is what lets DK App Blocker put the blocking screen over selected apps.", color = Muted, fontSize = 12.sp)
+                        Button(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Enable blocking") }
+                    }
+                }
+            }
+        }
         item {
             GlowCard(onClick = onCreateRule) {
                 Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text("Focus Mode", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Spacer(Modifier.height(3.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(9.dp).background(Green, CircleShape))
                             Spacer(Modifier.width(7.dp))
-                            Text(if (focusActive) "Active" else "Ready", color = Green, fontWeight = FontWeight.SemiBold)
+                            Text(if (activePlans.isNotEmpty()) "Active" else "Ready", color = Green, fontWeight = FontWeight.SemiBold)
                         }
-                        Spacer(Modifier.height(8.dp))
-                        Text(if (focusActive) "${formatDuration(focusRemaining)} remaining" else "Blocking distractions across your device", color = Muted, fontSize = 13.sp)
+                        Text("Blocking distractions across your device", color = Muted, fontSize = 13.sp)
                     }
-                    FocusRing(progress = if (focusActive) ((focusRemaining % 3_600_000L) / 3_600_000f).coerceIn(.12f, 1f) else .78f)
-                    Spacer(Modifier.width(5.dp))
-                    Icon(Icons.Rounded.ChevronRight, null, tint = Color.White)
+                    FocusRing(if (activePlans.isNotEmpty()) 1f else .78f)
+                    Icon(Icons.Rounded.ChevronRight, null)
                 }
             }
         }
-
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Active Rules", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = onCreateRule) { Text("See all", color = Green) }
             }
         }
-
-        if (plans.isEmpty()) {
-            item { EmptyRuleCard(onCreateRule) }
-        } else {
-            items(plans.take(4), key = { it.id }) { plan ->
-                HomeRuleRow(plan, plan in activePlans, onClick = { if (plan.name.contains("Strict", true)) onStrict() else onEdit(plan) })
-            }
+        if (plans.isEmpty()) item { EmptyRuleCard(onCreateRule) }
+        else items(plans.take(5), key = { it.id }) { plan ->
+            HomeRuleRow(plan, plan in activePlans) { if (plan.name.contains("Strict", true)) onStrict() else onEdit(plan) }
         }
-        item { Spacer(Modifier.height(8.dp)) }
     }
 }
 
 @Composable
 private fun GlowCard(onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
+        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),
         shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(containerColor = Panel2),
         border = androidx.compose.foundation.BorderStroke(1.dp, Line)
@@ -330,24 +334,8 @@ private fun FocusRing(progress: Float) {
         Canvas(Modifier.fillMaxSize()) {
             val stroke = 9.dp.toPx()
             val arcSize = Size(size.width - stroke, size.height - stroke)
-            drawArc(
-                color = Color(0xFF123C28),
-                startAngle = -90f,
-                sweepAngle = 360f,
-                useCenter = false,
-                topLeft = Offset(stroke / 2, stroke / 2),
-                size = arcSize,
-                style = Stroke(stroke, cap = StrokeCap.Round)
-            )
-            drawArc(
-                brush = Brush.sweepGradient(listOf(Green2, Green, Green2)),
-                startAngle = -90f,
-                sweepAngle = 360f * progress.coerceIn(.08f, 1f),
-                useCenter = false,
-                topLeft = Offset(stroke / 2, stroke / 2),
-                size = arcSize,
-                style = Stroke(stroke, cap = StrokeCap.Round)
-            )
+            drawArc(Color(0xFF123C28), -90f, 360f, false, Offset(stroke / 2, stroke / 2), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+            drawArc(Brush.sweepGradient(listOf(Green2, Green, Green2)), -90f, 360f * progress.coerceIn(.08f, 1f), false, Offset(stroke / 2, stroke / 2), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
         }
         Text("🍃", fontSize = 28.sp)
     }
@@ -355,10 +343,9 @@ private fun FocusRing(progress: Float) {
 
 @Composable
 private fun EmptyRuleCard(onCreateRule: () -> Unit) {
-    GlowCard(onClick = onCreateRule) {
+    GlowCard(onCreateRule) {
         Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("🌱", fontSize = 28.sp)
-            Spacer(Modifier.width(12.dp))
+            Text("🌱", fontSize = 28.sp); Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text("Create your first rule", fontWeight = FontWeight.Bold)
                 Text("Add an app limit, schedule or location block.", color = Muted, fontSize = 13.sp)
@@ -377,23 +364,15 @@ private fun HomeRuleRow(plan: BlockPlan, active: Boolean, onClick: () -> Unit) {
         border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF17241E))
     ) {
         Row(Modifier.padding(horizontal = 15.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(ruleEmoji(plan), fontSize = 28.sp)
-            Spacer(Modifier.width(12.dp))
+            Text(ruleEmoji(plan), fontSize = 28.sp); Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(plan.name, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+                Text(plan.name, fontWeight = FontWeight.SemiBold)
                 Text(ruleSummary(plan), color = Muted, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (active) {
-                Surface(shape = RoundedCornerShape(999.dp), color = Color(0xFF123D25)) {
-                    Text("Active", color = Green, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
-                }
-            } else if (!plan.enabled) {
-                Surface(shape = RoundedCornerShape(999.dp), color = Color(0xFF242A27)) {
-                    Text("Disabled", color = Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
-                }
+            Surface(shape = RoundedCornerShape(999.dp), color = if (active) Color(0xFF123D25) else Color(0xFF242A27)) {
+                Text(if (active) "Active" else if (!plan.enabled) "Disabled" else "Ready", color = if (active) Green else Muted, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
             }
-            Spacer(Modifier.width(5.dp))
-            Icon(Icons.Rounded.ChevronRight, null, tint = Color(0xFFD2D8D4), modifier = Modifier.size(20.dp))
+            Icon(Icons.Rounded.ChevronRight, null, modifier = Modifier.size(20.dp))
         }
     }
 }
@@ -401,7 +380,7 @@ private fun HomeRuleRow(plan: BlockPlan, active: Boolean, onClick: () -> Unit) {
 private fun ruleEmoji(plan: BlockPlan): String = when (plan.triggerType) {
     TriggerType.DAILY_LIMIT -> "⏰"
     TriggerType.LOCATION -> "📍"
-    TriggerType.MANUAL -> if (plan.name.contains("Morning", true)) "🌱" else "🍃"
+    TriggerType.MANUAL -> "🍃"
     TriggerType.SCHEDULE -> when {
         plan.name.contains("Morning", true) -> "☀️"
         plan.name.contains("Wind", true) || plan.startMinute >= 18 * 60 -> "🌙"
@@ -427,57 +406,39 @@ private fun daysLabel(days: Set<Int>): String = when {
 private fun formatMinute(minute: Int): String = "%02d:%02d".format((minute / 60) % 24, minute % 60)
 
 @Composable
-private fun RulesScreen(
-    plans: List<BlockPlan>,
-    onCreateRule: () -> Unit,
-    onEdit: (BlockPlan) -> Unit,
-    onReload: () -> Unit
-) {
+private fun RulesScreen(plans: List<BlockPlan>, onCreateRule: () -> Unit, onEdit: (BlockPlan) -> Unit, onReload: () -> Unit) {
     val context = LocalContext.current
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Rules", fontWeight = FontWeight.Bold, fontSize = 28.sp)
                     Text("Your automatic blocking routines.", color = Muted, fontSize = 13.sp)
                 }
-                FilledIconButton(onClick = onCreateRule, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Green, contentColor = Color.Black)) {
-                    Icon(Icons.Rounded.Add, "Create rule")
-                }
+                FilledIconButton(onClick = onCreateRule, colors = IconButtonDefaults.filledIconButtonColors(containerColor = Green, contentColor = Color.Black)) { Icon(Icons.Rounded.Add, "Create") }
             }
         }
-        if (plans.isEmpty()) {
-            item { EmptyRuleCard(onCreateRule) }
-        } else {
-            items(plans, key = { it.id }) { plan ->
-                Card(
-                    shape = RoundedCornerShape(20.dp),
-                    colors = CardDefaults.cardColors(containerColor = Panel),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF17241E))
-                ) {
-                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(ruleEmoji(plan), fontSize = 28.sp)
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f).clickable { onEdit(plan) }) {
-                            Text(plan.name, fontWeight = FontWeight.Bold)
-                            Text(ruleSummary(plan), color = Muted, fontSize = 12.sp)
-                        }
-                        Switch(
-                            checked = plan.enabled,
-                            onCheckedChange = { enabled ->
-                                val updated = plans.map { if (it.id == plan.id) it.copy(enabled = enabled) else it }
-                                Prefs.savePlans(context, updated)
-                                GeofenceManager.sync(context, updated)
-                                onReload()
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = Green)
-                        )
-                        IconButton(onClick = { onEdit(plan) }) { Icon(Icons.Rounded.ChevronRight, null) }
+        if (plans.isEmpty()) item { EmptyRuleCard(onCreateRule) }
+        else items(plans, key = { it.id }) { plan ->
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
+                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(ruleEmoji(plan), fontSize = 28.sp); Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f).clickable { onEdit(plan) }) {
+                        Text(plan.name, fontWeight = FontWeight.Bold)
+                        Text(ruleSummary(plan), color = Muted, fontSize = 12.sp)
                     }
+                    Switch(
+                        checked = plan.enabled,
+                        onCheckedChange = { enabled ->
+                            val strict = Prefs.getStrict(context)
+                            if (!strict.enabled || !strict.blockRuleChanges) {
+                                val updated = plans.map { if (it.id == plan.id) it.copy(enabled = enabled) else it }
+                                Prefs.savePlans(context, updated); GeofenceManager.sync(context, updated); onReload()
+                            }
+                        },
+                        colors = SwitchDefaults.colors(checkedTrackColor = Green)
+                    )
+                    IconButton(onClick = { onEdit(plan) }) { Icon(Icons.Rounded.ChevronRight, null) }
                 }
             }
         }
@@ -487,68 +448,30 @@ private fun RulesScreen(
 @Composable
 private fun CreateRuleTypeScreen(onBack: () -> Unit, onType: (TriggerType) -> Unit, onStrict: () -> Unit) {
     ScreenBackground {
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
-                    Spacer(Modifier.weight(1f))
-                    Text("Create Rule", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                    Spacer(Modifier.weight(1f))
-                    Spacer(Modifier.width(48.dp))
+                    Spacer(Modifier.weight(1f)); Text("Create Rule", fontWeight = FontWeight.Bold, fontSize = 18.sp); Spacer(Modifier.weight(1f)); Spacer(Modifier.width(48.dp))
                 }
             }
-            item {
-                Spacer(Modifier.height(8.dp))
-                Text("What do you want to block?", fontWeight = FontWeight.Bold, fontSize = 22.sp)
-                Text("Choose a rule type to get started.", color = Muted, fontSize = 13.sp)
-            }
+            item { Text("What do you want to block?", fontWeight = FontWeight.Bold, fontSize = 22.sp); Text("Choose a rule type to get started.", color = Muted, fontSize = 13.sp) }
             item { RuleTypeButton("⏰", "App Limit", "Set a daily time limit for apps") { onType(TriggerType.DAILY_LIMIT) } }
             item { RuleTypeButton("☀️", "Schedule", "Block apps at specific times") { onType(TriggerType.SCHEDULE) } }
             item { RuleTypeButton("📍", "Location", "Block apps at certain places") { onType(TriggerType.LOCATION) } }
             item { RuleTypeButton("🍃", "Focus Mode", "Create distraction-free sessions") { onType(TriggerType.MANUAL) } }
             item { RuleTypeButton("🔒", "Strict Mode", "Lock settings and prevent bypass") { onStrict() } }
-            item {
-                Card(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF082A18)),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF00B95A))
-                ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text("👑", fontSize = 28.sp)
-                        Spacer(Modifier.width(14.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Advanced tools", fontWeight = FontWeight.Bold)
-                            Text("All premium-style features are included", color = Muted, fontSize = 12.sp)
-                        }
-                        Icon(Icons.Rounded.CheckCircle, null, tint = Green)
-                    }
-                }
-            }
         }
     }
 }
 
 @Composable
 private fun RuleTypeButton(emoji: String, title: String, subtitle: String, onClick: () -> Unit) {
-    Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Panel2),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1C3027))
-    ) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel2)) {
         Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(emoji, fontSize = 30.sp)
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Text(subtitle, color = Muted, fontSize = 12.sp)
-            }
-            Icon(Icons.Rounded.ChevronRight, null, tint = Color.White)
+            Text(emoji, fontSize = 30.sp); Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 12.sp) }
+            Icon(Icons.Rounded.ChevronRight, null)
         }
     }
 }
@@ -573,145 +496,80 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
     var locationMessage by remember { mutableStateOf("") }
 
     fun fetchLocation() {
-        val granted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (!granted) return
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         locationMessage = "Finding your location…"
-        val client = LocationServices.getFusedLocationProviderClient(context)
-        client.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
+        LocationServices.getFusedLocationProviderClient(context)
+            .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
             .addOnSuccessListener { loc ->
-                if (loc != null) {
-                    lat = loc.latitude
-                    lon = loc.longitude
-                    locationMessage = "Location saved"
-                } else locationMessage = "Location unavailable. Try again outdoors."
+                if (loc != null) { lat = loc.latitude; lon = loc.longitude; locationMessage = "Location saved" }
+                else locationMessage = "Location unavailable"
             }
             .addOnFailureListener { locationMessage = "Could not get location" }
     }
 
-    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) fetchLocation() else locationMessage = "Location permission is required"
-    }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) fetchLocation() }
 
     ScreenBackground {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
                 Text("${ruleEmoji(initial)}  ${initial.name}", fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                TextButton(onClick = {
-                    onSave(initial.copy(name = name.ifBlank { initial.name }, packages = selectedApps.toList(), enabled = enabled, strict = strict, allowBreaks = allowBreaks, days = days, startMinute = startMinute, endMinute = endMinute, dailyLimitMinutes = limit, latitude = lat, longitude = lon, radiusMeters = radius, manualActive = manualActive))
-                }, enabled = selectedApps.isNotEmpty()) { Text("Save", color = if (selectedApps.isNotEmpty()) Green else Muted) }
             }
-
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Rule name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Green, focusedLabelColor = Green)
-                )
-
-                SettingCard(icon = "📱", title = "Apps to block", subtitle = if (selectedApps.isEmpty()) "Choose apps" else "${selectedApps.size} apps selected", onClick = { showApps = true })
-
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Rule name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
+                SettingCard("📱", "Apps to block", if (selectedApps.isEmpty()) "Choose apps" else "${selectedApps.size} apps selected") { showApps = true }
                 when (initial.triggerType) {
-                    TriggerType.DAILY_LIMIT -> {
-                        LabeledCard("Daily limit", "Block the selected apps after this much combined use each day.") {
-                            Text("$limit minutes", color = Green, fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                            Slider(value = limit.toFloat(), onValueChange = { limit = it.roundToInt().coerceIn(5, 240) }, valueRange = 5f..240f, steps = 46)
+                    TriggerType.DAILY_LIMIT -> LabeledCard("Daily limit", "Block the selected apps after this much combined use each day.") {
+                        Text("$limit minutes", color = Green, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                        Slider(limit.toFloat(), { limit = it.roundToInt().coerceIn(5, 240) }, valueRange = 5f..240f)
+                    }
+                    TriggerType.SCHEDULE -> LabeledCard("When to block", "Choose days and start/end time.") {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                            items((1..7).toList()) { day ->
+                                val labels = listOf("M", "T", "W", "T", "F", "S", "S")
+                                FilterChip(selected = day in days, onClick = { days = if (day in days) days - day else days + day }, label = { Text(labels[day - 1]) })
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            OutlinedButton(onClick = { showTimePicker(context, startMinute) { startMinute = it } }, modifier = Modifier.weight(1f)) { Text("Start ${formatMinute(startMinute)}") }
+                            OutlinedButton(onClick = { showTimePicker(context, endMinute) { endMinute = it } }, modifier = Modifier.weight(1f)) { Text("End ${formatMinute(endMinute)}") }
                         }
                     }
-                    TriggerType.SCHEDULE -> {
-                        LabeledCard("When to block", "Choose days and a start/end time.") {
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                                items((1..7).toList()) { day ->
-                                    val labels = listOf("M", "T", "W", "T", "F", "S", "S")
-                                    FilterChip(
-                                        selected = day in days,
-                                        onClick = { days = if (day in days) days - day else days + day },
-                                        label = { Text(labels[day - 1]) },
-                                        colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Green, selectedLabelColor = Color.Black)
-                                    )
-                                }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                OutlinedButton(onClick = { showTimePicker(context, startMinute) { startMinute = it } }, modifier = Modifier.weight(1f)) { Text("Start ${formatMinute(startMinute)}") }
-                                OutlinedButton(onClick = { showTimePicker(context, endMinute) { endMinute = it } }, modifier = Modifier.weight(1f)) { Text("End ${formatMinute(endMinute)}") }
-                            }
-                        }
+                    TriggerType.LOCATION -> LabeledCard("Location block", "Block selected apps inside this radius.") {
+                        Text(if (lat == 0.0 && lon == 0.0) "No location saved" else "${"%.5f".format(lat)}, ${"%.5f".format(lon)}", color = if (lat == 0.0 && lon == 0.0) Muted else Green)
+                        Button(onClick = { if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) fetchLocation() else locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }) { Text("📍 Use my current location") }
+                        if (locationMessage.isNotBlank()) Text(locationMessage, color = Muted, fontSize = 12.sp)
+                        Text("Radius ${radius.roundToInt()}m"); Slider(radius, { radius = it }, valueRange = 100f..1000f)
                     }
-                    TriggerType.LOCATION -> {
-                        LabeledCard("Location block", "Block selected apps inside this radius.") {
-                            Text(if (lat == 0.0 && lon == 0.0) "No location saved" else "${"%.5f".format(lat)}, ${"%.5f".format(lon)}", color = if (lat == 0.0 && lon == 0.0) Muted else Green)
-                            Button(onClick = {
-                                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) fetchLocation()
-                                else locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-                            }) { Text("📍 Use my current location") }
-                            if (locationMessage.isNotBlank()) Text(locationMessage, color = Muted, fontSize = 12.sp)
-                            Text("Radius ${radius.roundToInt()} m", fontWeight = FontWeight.SemiBold)
-                            Slider(value = radius, onValueChange = { radius = it }, valueRange = 100f..1000f)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                Text("For reliable background geofencing, allow location access all the time in Android settings.", color = Muted, fontSize = 12.sp)
-                                TextButton(onClick = {
-                                    context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
-                                }) { Text("Open app permissions", color = Green) }
-                            }
-                        }
-                    }
-                    TriggerType.MANUAL -> {
-                        LabeledCard("Focus mode", "Turn this block on or off manually.") {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text("Active now", fontWeight = FontWeight.Bold)
-                                    Text("The selected apps are blocked while this is on.", color = Muted, fontSize = 12.sp)
-                                }
-                                Switch(checked = manualActive, onCheckedChange = { manualActive = it }, colors = SwitchDefaults.colors(checkedTrackColor = Green))
-                            }
-                        }
+                    TriggerType.MANUAL -> LabeledCard("Focus mode", "Turn this block on or off manually.") {
+                        ToggleRow("Active now", manualActive) { manualActive = it }
                     }
                 }
-
                 LabeledCard("Protection", "Optional controls for harder-to-bypass rules.") {
                     ToggleRow("Rule enabled", enabled) { enabled = it }
                     ToggleRow("Strict block", strict) { strict = it }
                     ToggleRow("Allow 5-minute breaks", allowBreaks) { allowBreaks = it }
                 }
-
                 Button(
-                    onClick = {
-                        onSave(initial.copy(name = name.ifBlank { initial.name }, packages = selectedApps.toList(), enabled = enabled, strict = strict, allowBreaks = allowBreaks, days = days, startMinute = startMinute, endMinute = endMinute, dailyLimitMinutes = limit, latitude = lat, longitude = lon, radiusMeters = radius, manualActive = manualActive))
-                    },
+                    onClick = { onSave(initial.copy(name = name.ifBlank { initial.name }, packages = selectedApps.toList(), enabled = enabled, strict = strict, allowBreaks = allowBreaks, days = days, startMinute = startMinute, endMinute = endMinute, dailyLimitMinutes = limit, latitude = lat, longitude = lon, radiusMeters = radius, manualActive = manualActive)) },
                     enabled = selectedApps.isNotEmpty(),
                     modifier = Modifier.fillMaxWidth().height(56.dp),
-                    shape = RoundedCornerShape(18.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.Black)
+                    colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.Black),
+                    shape = RoundedCornerShape(18.dp)
                 ) { Text("Save Rule", fontWeight = FontWeight.Bold) }
-                Spacer(Modifier.height(28.dp))
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
-
-    if (showApps) AppPickerDialog(selectedApps, onDismiss = { showApps = false }, onSave = { selectedApps = it; showApps = false })
+    if (showApps) AppPickerDialog(selectedApps, { showApps = false }) { selectedApps = it; showApps = false }
 }
 
 @Composable
 private fun SettingCard(icon: String, title: String, subtitle: String, onClick: () -> Unit) {
-    Card(
-        Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = Panel2),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Line)
-    ) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel2)) {
         Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(icon, fontSize = 28.sp)
-            Spacer(Modifier.width(13.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold)
-                Text(subtitle, color = Muted, fontSize = 12.sp)
-            }
+            Text(icon, fontSize = 28.sp); Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 12.sp) }
             Icon(Icons.Rounded.ChevronRight, null)
         }
     }
@@ -719,26 +577,16 @@ private fun SettingCard(icon: String, title: String, subtitle: String, onClick: 
 
 @Composable
 private fun LabeledCard(title: String, subtitle: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(
-        Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = Panel),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF18261F))
-    ) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp)
-            Text(subtitle, color = Muted, fontSize = 12.sp)
-            content()
+            Text(title, fontWeight = FontWeight.Bold, fontSize = 17.sp); Text(subtitle, color = Muted, fontSize = 12.sp); content()
         }
     }
 }
 
 @Composable
 private fun ToggleRow(title: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(title, modifier = Modifier.weight(1f), fontSize = 14.sp)
-        Switch(checked = value, onCheckedChange = onChange, colors = SwitchDefaults.colors(checkedTrackColor = Green))
-    }
+    Row(verticalAlignment = Alignment.CenterVertically) { Text(title, modifier = Modifier.weight(1f)); Switch(value, onChange, colors = SwitchDefaults.colors(checkedTrackColor = Green)) }
 }
 
 @Composable
@@ -748,25 +596,17 @@ private fun AppPickerDialog(selected: Set<String>, onDismiss: () -> Unit, onSave
     var chosen by remember { mutableStateOf(selected) }
     var search by remember { mutableStateOf("") }
     val filtered = remember(search, apps) { apps.filter { search.isBlank() || it.label.contains(search, true) } }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Choose apps") },
         text = {
             Column(Modifier.heightIn(max = 520.dp)) {
-                OutlinedTextField(value = search, onValueChange = { search = it }, placeholder = { Text("Search apps") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(search, { search = it }, placeholder = { Text("Search apps") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 LazyColumn {
                     items(filtered, key = { it.packageName }) { app ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable { chosen = if (app.packageName in chosen) chosen - app.packageName else chosen + app.packageName }.padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(checked = app.packageName in chosen, onCheckedChange = { checked -> chosen = if (checked) chosen + app.packageName else chosen - app.packageName })
-                            Column(Modifier.weight(1f)) {
-                                Text(app.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(app.packageName, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
+                        Row(Modifier.fillMaxWidth().clickable { chosen = if (app.packageName in chosen) chosen - app.packageName else chosen + app.packageName }.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(app.packageName in chosen, { checked -> chosen = if (checked) chosen + app.packageName else chosen - app.packageName })
+                            Column { Text(app.label); Text(app.packageName, color = Muted, fontSize = 10.sp) }
                         }
                     }
                 }
@@ -785,12 +625,48 @@ private fun showTimePicker(context: Context, minute: Int, onPicked: (Int) -> Uni
 private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) {
     val context = LocalContext.current
     var strict by remember { mutableStateOf(Prefs.getStrict(context)) }
-    var showPinSetup by remember { mutableStateOf(false) }
-    var showUnlock by remember { mutableStateOf(false) }
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var showPasswordSetup by remember { mutableStateOf(false) }
+    var showPasswordUnlock by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf("") }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            kotlinx.coroutines.delay(1000)
+            now = System.currentTimeMillis()
+            val latest = Prefs.getStrict(context)
+            if (latest != strict) strict = latest
+        }
+    }
+
+    val adminActive = isDeviceAdminActive(context)
+    val method = strict.unlockMethod ?: "PASSWORD"
+    val remaining = (strict.lockUntil - now).coerceAtLeast(0L)
 
     fun save(updated: StrictSettings) {
         strict = updated
         Prefs.saveStrict(context, updated)
+    }
+
+    fun activate() {
+        if (strict.preventUninstall && !isDeviceAdminActive(context)) {
+            requestDeviceAdmin(context)
+            notice = "Enable Device Administrator protection, then tap Activate again."
+            return
+        }
+        if (method == "PASSWORD" && strict.pinHash.isBlank()) {
+            showPasswordSetup = true
+            notice = "Set a password before activating password verification."
+            return
+        }
+        val until = if (method == "TIMER") now + strict.timerDurationMinutes * 60_000L else 0L
+        save(strict.copy(enabled = true, lockUntil = until))
+        notice = "Strict Mode activated."
+    }
+
+    fun disableVerified() {
+        save(strict.copy(enabled = false, lockUntil = 0L))
+        notice = "Strict Mode disabled."
     }
 
     Scaffold(
@@ -805,131 +681,140 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
                     Triple("Profile", Icons.Rounded.Person, MainTab.PROFILE)
                 )
                 navItems.forEach { item ->
-                    NavigationBarItem(
-                        selected = item.third == null,
-                        onClick = { if (item.third != null) onNavigate(item.third!!) },
-                        colors = NavigationBarItemDefaults.colors(selectedIconColor = Green, selectedTextColor = Green, indicatorColor = Color.Transparent),
-                        icon = { Icon(item.second, null) },
-                        label = { Text(item.first, fontSize = 9.sp, maxLines = 1) }
-                    )
+                    NavigationBarItem(selected = item.third == null, onClick = { item.third?.let(onNavigate) }, icon = { Icon(item.second, null) }, label = { Text(item.first, fontSize = 9.sp) }, colors = NavigationBarItemDefaults.colors(selectedIconColor = Green, selectedTextColor = Green, indicatorColor = Color.Transparent))
                 }
             }
         }
     ) { inner ->
         ScreenBackground {
-            LazyColumn(
-                Modifier.fillMaxSize().padding(inner),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(14.dp)
-            ) {
+            LazyColumn(Modifier.fillMaxSize().padding(inner), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 item {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
-                        Text("Strict Mode", fontWeight = FontWeight.Bold, fontSize = 19.sp, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                        IconButton(onClick = { showPinSetup = true }) { Icon(Icons.Rounded.Settings, "Strict settings") }
+                        Text("Strict Mode", fontWeight = FontWeight.Bold, fontSize = 19.sp, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
+                        Spacer(Modifier.width(48.dp))
                     }
                 }
                 item { StrictRing(strict.enabled) }
                 item {
                     Text(if (strict.enabled) "Active" else "Inactive", fontSize = 26.sp, fontWeight = FontWeight.Bold)
-                    Text(if (strict.enabled) "🍃  Your focus is protected" else "Turn on strict mode for stronger protection", color = Muted, fontSize = 13.sp)
+                    Text(if (strict.enabled) "🍃 Your focus is protected" else "Choose protections and an unlock method", color = Muted, fontSize = 13.sp)
                 }
                 item {
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = Panel),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF183122))
-                    ) {
+                    LabeledCard("Unlock method", "Choose how Strict Mode is allowed to end.") {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf("TIMER" to "⏳ Timer", "PASSWORD" to "🔑 Password", "BIOMETRIC" to "🫆 Biometrics").forEach { (value, label) ->
+                                FilterChip(selected = method == value, enabled = !strict.enabled, onClick = { save(strict.copy(unlockMethod = value)) }, label = { Text(label, fontSize = 11.sp) })
+                            }
+                        }
+                        if (method == "TIMER") {
+                            Text(if (strict.enabled) "Ends in ${formatDuration(remaining)}" else "Duration: ${strict.timerDurationMinutes} minutes", color = Green, fontWeight = FontWeight.Bold)
+                            if (!strict.enabled) Slider(strict.timerDurationMinutes.toFloat(), { save(strict.copy(timerDurationMinutes = it.roundToInt().coerceIn(5, 240))) }, valueRange = 5f..240f)
+                        }
+                        if (method == "PASSWORD" && !strict.enabled) {
+                            OutlinedButton(onClick = { showPasswordSetup = true }) { Text(if (strict.pinHash.isBlank()) "Set password" else "Change password") }
+                        }
+                        if (method == "BIOMETRIC") Text("Android will show the system biometric prompt when you try to disable Strict Mode.", color = Muted, fontSize = 12.sp)
+                    }
+                }
+                item {
+                    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            StrictCheckRow(Icons.Rounded.List, "Lock rule changes in app", strict.blockRuleChanges) { save(strict.copy(blockRuleChanges = !strict.blockRuleChanges)) }
-                            StrictCheckRow(Icons.Rounded.NoAccounts, "Prevent app uninstalling", strict.preventUninstall) { save(strict.copy(preventUninstall = !strict.preventUninstall)) }
-                            StrictCheckRow(Icons.Rounded.Settings, "Block device settings", strict.blockDeviceSettings) { save(strict.copy(blockDeviceSettings = !strict.blockDeviceSettings)) }
-                            StrictCheckRow(Icons.Rounded.ViewCarousel, "Block recent apps", strict.blockRecents) { save(strict.copy(blockRecents = !strict.blockRecents)) }
-                            StrictCheckRow(Icons.Rounded.Splitscreen, "Block split screen", strict.blockSplitScreen) { save(strict.copy(blockSplitScreen = !strict.blockSplitScreen)) }
+                            StrictCheckRow(Icons.Rounded.List, "Lock rule changes in app", strict.blockRuleChanges, !strict.enabled) { save(strict.copy(blockRuleChanges = !strict.blockRuleChanges)) }
+                            StrictCheckRow(Icons.Rounded.NoAccounts, "Prevent app uninstalling", strict.preventUninstall, !strict.enabled) {
+                                val next = !strict.preventUninstall
+                                save(strict.copy(preventUninstall = next))
+                                if (next && !isDeviceAdminActive(context)) requestDeviceAdmin(context)
+                            }
+                            StrictCheckRow(Icons.Rounded.Settings, "Block device settings", strict.blockDeviceSettings, !strict.enabled) { save(strict.copy(blockDeviceSettings = !strict.blockDeviceSettings)) }
+                            StrictCheckRow(Icons.Rounded.ViewCarousel, "Block recent apps", strict.blockRecents, !strict.enabled) { save(strict.copy(blockRecents = !strict.blockRecents)) }
+                            StrictCheckRow(Icons.Rounded.Splitscreen, "Block split screen", strict.blockSplitScreen, !strict.enabled) { save(strict.copy(blockSplitScreen = !strict.blockSplitScreen)) }
                         }
                     }
                 }
                 item {
+                    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel2)) {
+                        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("🛡️", fontSize = 25.sp); Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) { Text("Uninstall protection", fontWeight = FontWeight.Bold); Text(if (adminActive) "Device Administrator active" else "Device Administrator not enabled", color = Muted, fontSize = 12.sp) }
+                            if (!adminActive) TextButton(onClick = { requestDeviceAdmin(context) }) { Text("Enable", color = Green) }
+                            else if (!strict.enabled) TextButton(onClick = { removeDeviceAdmin(context); notice = "Device Administrator removal requested." }) { Text("Remove") }
+                        }
+                    }
+                }
+                if (notice.isNotBlank()) item { Text(notice, color = if (notice.contains("activated", true) || notice.contains("disabled", true)) Green else Color(0xFFFFC857), fontSize = 12.sp, textAlign = TextAlign.Center) }
+                item {
                     Button(
                         onClick = {
-                            if (strict.enabled && strict.pinHash.isNotBlank()) showUnlock = true else save(strict.copy(enabled = !strict.enabled))
+                            if (!strict.enabled) activate()
+                            else when (method) {
+                                "TIMER" -> notice = if (remaining > 0) "Strict Mode will end automatically in ${formatDuration(remaining)}." else { disableVerified(); "" }
+                                "BIOMETRIC" -> launchBiometricVerification(context, onSuccess = ::disableVerified, onError = { notice = it })
+                                else -> showPasswordUnlock = true
+                            }
                         },
                         modifier = Modifier.fillMaxWidth().height(56.dp),
                         shape = RoundedCornerShape(22.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF0E3A22), contentColor = Color.White),
                         border = androidx.compose.foundation.BorderStroke(1.dp, Green)
                     ) {
-                        Icon(if (strict.enabled) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (strict.enabled) "Pause Strict Mode" else "Activate Strict Mode", fontWeight = FontWeight.Bold)
+                        Icon(if (strict.enabled) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, null); Spacer(Modifier.width(8.dp))
+                        Text(if (strict.enabled) when (method) { "TIMER" -> "Timer Locked"; "BIOMETRIC" -> "Verify & Disable"; else -> "Verify & Disable" } else "Activate Strict Mode", fontWeight = FontWeight.Bold)
                     }
                 }
-                item { Text("Strict protections are best-effort on a normal Android installation; Android itself still controls permissions and device-owner capabilities.", color = Muted, fontSize = 11.sp) }
+                item { Text("Device Administrator makes direct uninstall harder. Blocking Settings through Accessibility adds another layer, but Android still allows recovery methods such as safe mode, ADB, or administrator removal outside the app.", color = Muted, fontSize = 11.sp) }
             }
         }
     }
 
-    if (showPinSetup) PinSetupDialog(strict, onDismiss = { showPinSetup = false }, onSave = { save(it); showPinSetup = false })
-    if (showUnlock) PinUnlockDialog(onDismiss = { showUnlock = false }, onSuccess = { save(strict.copy(enabled = false)); showUnlock = false })
+    if (showPasswordSetup) PasswordSetupDialog(strict, { showPasswordSetup = false }) { save(it); showPasswordSetup = false }
+    if (showPasswordUnlock) PasswordUnlockDialog({ showPasswordUnlock = false }) { disableVerified(); showPasswordUnlock = false }
 }
 
 @Composable
 private fun StrictRing(active: Boolean) {
     Box(Modifier.size(190.dp), contentAlignment = Alignment.Center) {
         Canvas(Modifier.fillMaxSize()) {
-            val stroke = 10.dp.toPx()
-            val s = Size(size.width - stroke, size.height - stroke)
-            drawCircle(color = Color(0x2210FF70), radius = size.minDimension / 2.1f)
-            drawArc(color = Color(0xFF16442B), startAngle = -90f, sweepAngle = 360f, useCenter = false, topLeft = Offset(stroke / 2, stroke / 2), size = s, style = Stroke(stroke, cap = StrokeCap.Round))
-            drawArc(brush = Brush.sweepGradient(listOf(Green2, Green, Green2)), startAngle = -90f, sweepAngle = if (active) 360f else 110f, useCenter = false, topLeft = Offset(stroke / 2, stroke / 2), size = s, style = Stroke(stroke, cap = StrokeCap.Round))
+            val stroke = 10.dp.toPx(); val s = Size(size.width - stroke, size.height - stroke)
+            drawCircle(Color(0x2210FF70), radius = size.minDimension / 2.1f)
+            drawArc(Color(0xFF16442B), -90f, 360f, false, Offset(stroke / 2, stroke / 2), s, style = Stroke(stroke, cap = StrokeCap.Round))
+            drawArc(Brush.sweepGradient(listOf(Green2, Green, Green2)), -90f, if (active) 360f else 110f, false, Offset(stroke / 2, stroke / 2), s, style = Stroke(stroke, cap = StrokeCap.Round))
         }
         Text("🔒", fontSize = 42.sp)
     }
 }
 
 @Composable
-private fun StrictCheckRow(icon: ImageVector, label: String, enabled: Boolean, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(onClick = onClick), verticalAlignment = Alignment.CenterVertically) {
-        Icon(icon, null, tint = Color(0xFFD9E2DD), modifier = Modifier.size(19.dp))
-        Spacer(Modifier.width(13.dp))
-        Text(label, modifier = Modifier.weight(1f), fontSize = 13.sp)
-        Icon(if (enabled) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (enabled) Green else Muted, modifier = Modifier.size(18.dp))
+private fun StrictCheckRow(icon: ImageVector, label: String, checked: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier), verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, null, tint = if (enabled) Color(0xFFD9E2DD) else Muted, modifier = Modifier.size(19.dp)); Spacer(Modifier.width(13.dp))
+        Text(label, modifier = Modifier.weight(1f), fontSize = 13.sp, color = if (enabled) Color.White else Muted)
+        Icon(if (checked) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null, tint = if (checked) Green else Muted, modifier = Modifier.size(18.dp))
     }
 }
 
 @Composable
-private fun PinSetupDialog(strict: StrictSettings, onDismiss: () -> Unit, onSave: (StrictSettings) -> Unit) {
-    var pin by remember { mutableStateOf("") }
+private fun PasswordSetupDialog(strict: StrictSettings, onDismiss: () -> Unit, onSave: (StrictSettings) -> Unit) {
+    var password by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Strict Mode PIN") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Set a PIN that is required before strict mode can be paused.", color = Muted, fontSize = 13.sp)
-                OutlinedTextField(value = pin, onValueChange = { pin = it.filter(Char::isDigit).take(8) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("4–8 digits") })
-            }
-        },
-        confirmButton = { TextButton(onClick = { if (pin.length >= 4) onSave(strict.copy(pinHash = Prefs.hashPin(pin))) }, enabled = pin.length >= 4) { Text("Save", color = Green) } },
+        title = { Text("Strict Mode password") },
+        text = { OutlinedTextField(password, { password = it.take(64) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("At least 4 characters") }) },
+        confirmButton = { TextButton(onClick = { if (password.length >= 4) onSave(strict.copy(pinHash = Prefs.hashPin(password))) }, enabled = password.length >= 4) { Text("Save", color = Green) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
 
 @Composable
-private fun PinUnlockDialog(onDismiss: () -> Unit, onSuccess: () -> Unit) {
+private fun PasswordUnlockDialog(onDismiss: () -> Unit, onSuccess: () -> Unit) {
     val context = LocalContext.current
-    var pin by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Pause Strict Mode") },
-        text = {
-            Column {
-                OutlinedTextField(value = pin, onValueChange = { pin = it.filter(Char::isDigit).take(8); error = false }, singleLine = true, isError = error, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("PIN") })
-                if (error) Text("Incorrect PIN", color = Danger, fontSize = 12.sp)
-            }
-        },
-        confirmButton = { TextButton(onClick = { if (Prefs.checkPin(context, pin)) onSuccess() else error = true }) { Text("Pause", color = Green) } },
+        title = { Text("Disable Strict Mode") },
+        text = { Column { OutlinedTextField(password, { password = it.take(64); error = false }, singleLine = true, isError = error, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("Password") }); if (error) Text("Incorrect password", color = Danger, fontSize = 12.sp) } },
+        confirmButton = { TextButton(onClick = { if (Prefs.checkPin(context, password)) onSuccess() else error = true }) { Text("Disable", color = Green) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -939,90 +824,47 @@ private fun InsightsScreen(tick: Long) {
     val context = LocalContext.current
     var selectedDays by remember { mutableIntStateOf(1) }
     val hasAccess = remember(tick / 5000L) { hasUsageAccess(context) }
-    val end = tick
     val start = remember(selectedDays, tick / 60_000L) { LocalDate.now().minusDays((selectedDays - 1).toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() }
-    val usage = remember(selectedDays, tick / 60_000L, hasAccess) { if (hasAccess) RuleEngine.topUsage(context, start, end) else emptyList() }
+    val usage = remember(selectedDays, tick / 60_000L, hasAccess) { if (hasAccess) RuleEngine.topUsage(context, start, tick) else emptyList() }
     val total = usage.sumOf { it.millis }
-
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item { Row { Text("Insights", fontWeight = FontWeight.Bold, fontSize = 28.sp, modifier = Modifier.weight(1f)); Text("📅 Today") } }
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Insights", fontWeight = FontWeight.Bold, fontSize = 28.sp, modifier = Modifier.weight(1f))
-                Text("📅  Today", color = Color.White, fontSize = 13.sp)
+            Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(999.dp)).padding(4.dp)) {
+                PeriodPill("Day", selectedDays == 1, Modifier.weight(1f)) { selectedDays = 1 }; PeriodPill("Week", selectedDays == 7, Modifier.weight(1f)) { selectedDays = 7 }; PeriodPill("Month", selectedDays == 30, Modifier.weight(1f)) { selectedDays = 30 }
             }
         }
-        item {
-            Row(Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(999.dp)).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                PeriodPill("Day", selectedDays == 1, Modifier.weight(1f)) { selectedDays = 1 }
-                PeriodPill("Week", selectedDays == 7, Modifier.weight(1f)) { selectedDays = 7 }
-                PeriodPill("Month", selectedDays == 30, Modifier.weight(1f)) { selectedDays = 30 }
-            }
-        }
-        if (!hasAccess) {
-            item { PermissionCard("Screen-time access required", "Grant Usage Access so Insights and daily app limits can use Android screen-time data.", "Grant access") { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
-        } else {
-            item {
-                Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF18261F))) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text("Screen Time", color = Muted, fontSize = 12.sp)
-                        Text(formatDuration(total), fontSize = 36.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(10.dp))
-                        UsageBars(total)
-                    }
-                }
-            }
-            item {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Most used apps", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
-                    Text("See all", color = Green, fontSize = 12.sp)
-                }
-            }
+        if (!hasAccess) item { PermissionCard("Screen-time access required", "Grant Usage Access for app limits and insights.", "Grant access") { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
+        else {
+            item { Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(16.dp)) { Text("Screen Time", color = Muted); Text(formatDuration(total), fontSize = 36.sp, fontWeight = FontWeight.Bold); UsageBars(total) } } }
+            item { Text("Most used apps", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
             if (usage.isEmpty()) item { Text("No usage data yet.", color = Muted) }
-            else items(usage.take(8), key = { it.packageName }) { row -> UsageRowCard(row, total) }
+            else items(usage.take(8), key = { it.packageName }) { UsageRowCard(it, total) }
         }
     }
 }
 
 @Composable
 private fun PeriodPill(text: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Box(modifier.clip(RoundedCornerShape(999.dp)).background(if (selected) Green else Color.Transparent).clickable(onClick = onClick).padding(vertical = 9.dp), contentAlignment = Alignment.Center) {
-        Text(text, color = if (selected) Color.Black else Color(0xFFC4CDC8), fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal, fontSize = 12.sp)
-    }
+    Box(modifier.clip(RoundedCornerShape(999.dp)).background(if (selected) Green else Color.Transparent).clickable(onClick = onClick).padding(vertical = 9.dp), contentAlignment = Alignment.Center) { Text(text, color = if (selected) Color.Black else Color.White) }
 }
 
 @Composable
 private fun UsageBars(total: Long) {
-    val hours = (total / 3_600_000f).coerceAtLeast(.05f)
-    val values = listOf(.55f, .18f, .12f, .3f, .22f, .45f, .32f, .52f, .66f, .41f, .23f, .76f).map { (it * (0.55f + hours / 8f)).coerceIn(.08f, .95f) }
+    val values = listOf(.55f, .18f, .12f, .3f, .22f, .45f, .32f, .52f, .66f, .41f, .23f, .76f)
     Canvas(Modifier.fillMaxWidth().height(100.dp)) {
         val gap = size.width / values.size
-        values.forEachIndexed { index, value ->
-            val w = gap * .34f
-            val left = index * gap + gap * .33f
-            drawRoundRect(color = if (index == values.lastIndex - 1) Green else Color(0xFF233129), topLeft = Offset(left, size.height * (1f - value)), size = Size(w, size.height * value), cornerRadius = androidx.compose.ui.geometry.CornerRadius(w / 2, w / 2))
-        }
+        values.forEachIndexed { i, v -> val w = gap * .34f; drawRoundRect(if (i == values.lastIndex - 1) Green else Color(0xFF233129), Offset(i * gap + gap * .33f, size.height * (1f - v)), Size(w, size.height * v), androidx.compose.ui.geometry.CornerRadius(w / 2, w / 2)) }
     }
 }
 
 @Composable
 private fun UsageRowCard(row: UsageRow, total: Long) {
     val fraction = if (total > 0) row.millis.toFloat() / total else 0f
-    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF17241E))) {
+    Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(42.dp).background(Color.White, CircleShape), contentAlignment = Alignment.Center) { Text(row.label.take(1).uppercase(), color = Color.Black, fontWeight = FontWeight.Bold) }
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(row.label, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Spacer(Modifier.height(5.dp))
-                LinearProgressIndicator(progress = { fraction.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(4.dp), color = Green, trackColor = Color(0xFF26322C))
-            }
-            Spacer(Modifier.width(12.dp))
-            Text(formatDuration(row.millis), fontSize = 13.sp)
-            Icon(Icons.Rounded.ChevronRight, null, tint = Muted, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(row.label, fontWeight = FontWeight.Bold); LinearProgressIndicator(progress = { fraction.coerceIn(0f, 1f) }, modifier = Modifier.fillMaxWidth().height(4.dp), color = Green) }; Spacer(Modifier.width(12.dp)); Text(formatDuration(row.millis))
         }
     }
 }
@@ -1033,63 +875,30 @@ private fun ProfileScreen(tick: Long, onStrict: () -> Unit) {
     val accessibility = remember(tick / 3000L) { isAccessibilityEnabled(context) }
     val usage = remember(tick / 3000L) { hasUsageAccess(context) }
     val fine = remember(tick / 3000L) { ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED }
-    val background = remember(tick / 3000L) { Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED }
+    val admin = remember(tick / 3000L) { isDeviceAdminActive(context) }
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-
-    LazyColumn(
-        Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        item {
-            Box(Modifier.size(90.dp).background(Color(0xFF6840A4), CircleShape), contentAlignment = Alignment.Center) { Text("D", fontSize = 48.sp) }
-            Spacer(Modifier.height(10.dp))
-            Text("DK", fontSize = 30.sp, fontWeight = FontWeight.Medium)
-            Text("All features unlocked", color = Green, fontSize = 12.sp)
-        }
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        item { Box(Modifier.size(90.dp).background(Color(0xFF174F2E), CircleShape), contentAlignment = Alignment.Center) { Text("D", fontSize = 48.sp) }; Text("DK", fontSize = 30.sp); Text("All features unlocked", color = Green, fontSize = 12.sp) }
+        item { SettingCard("🎨", "Blocked screen", "Change colours, heading and message") { context.startActivity(Intent(context, BlockScreenSettingsActivity::class.java)) } }
+        item { SettingCard("🔒", "Strict Mode", if (Prefs.getStrict(context).enabled) "Active" else "Configure advanced protections", onStrict) }
         item { PermissionStatusRow("🛡️", "Accessibility", accessibility, "Needed to enforce app blocking") { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
         item { PermissionStatusRow("📊", "Usage access", usage, "Needed for app limits and insights") { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
         item { PermissionStatusRow("📍", "Precise location", fine, "Needed for location-based rules") { locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) } }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            item { PermissionStatusRow("🗺️", "Background location", background, "Needed for reliable geofences") { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) } }
-        }
-        item { SettingCard("🔒", "Strict Mode", if (Prefs.getStrict(context).enabled) "Active" else "Configure advanced protections", onStrict) }
-        item {
-            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0B2718)), border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF164A2D))) {
-                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("🌱  Local-first", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                    Text("Rules, PIN hashes and block history are kept on this device. No account is required.", color = Muted, fontSize = 12.sp)
-                }
-            }
-        }
+        item { PermissionStatusRow("🔐", "Device Administrator", admin, "Used by uninstall protection in Strict Mode") { if (admin) Unit else requestDeviceAdmin(context) } }
+        item { Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0B2718))) { Column(Modifier.padding(18.dp)) { Text("🌱 Local-first", fontWeight = FontWeight.Bold); Text("Rules, passwords, block-screen customisation and history stay on this device.", color = Muted, fontSize = 12.sp) } } }
     }
 }
 
 @Composable
 private fun PermissionCard(title: String, body: String, button: String, onClick: () -> Unit) {
-    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel2), border = androidx.compose.foundation.BorderStroke(1.dp, Line)) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(title, fontWeight = FontWeight.Bold)
-            Text(body, color = Muted, fontSize = 12.sp)
-            Button(onClick = onClick) { Text(button) }
-        }
-    }
+    Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel2)) { Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { Text(title, fontWeight = FontWeight.Bold); Text(body, color = Muted, fontSize = 12.sp); Button(onClick = onClick) { Text(button) } } }
 }
 
 @Composable
 private fun PermissionStatusRow(emoji: String, title: String, granted: Boolean, subtitle: String, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick), shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
         Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(emoji, fontSize = 26.sp)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.Bold)
-                Text(subtitle, color = Muted, fontSize = 11.sp)
-            }
-            Text(if (granted) "Ready" else "Set up", color = if (granted) Green else Color(0xFFFFC857), fontWeight = FontWeight.Bold, fontSize = 12.sp)
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.Rounded.ChevronRight, null, tint = Muted, modifier = Modifier.size(18.dp))
+            Text(emoji, fontSize = 26.sp); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.Bold); Text(subtitle, color = Muted, fontSize = 11.sp) }; Text(if (granted) "Ready" else "Set up", color = if (granted) Green else Color(0xFFFFC857), fontWeight = FontWeight.Bold, fontSize = 12.sp)
         }
     }
 }
