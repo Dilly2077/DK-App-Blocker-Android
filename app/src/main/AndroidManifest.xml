@@ -22,6 +22,11 @@
         android:theme="@style/Theme.DKAppBlocker">
 
         <activity
+            android:name=".BlockScreenSettingsActivity"
+            android:exported="false"
+            android:theme="@style/Theme.DKAppBlocker" />
+
+        <activity
             android:name=".BlockActivity"
             android:excludeFromRecents="true"
             android:exported="false"
@@ -49,6 +54,20 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <receiver
+            android:name=".StrictDeviceAdminReceiver"
+            android:description="@string/app_name"
+            android:exported="true"
+            android:label="DK App Blocker Strict Mode"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
 
         <receiver
             android:name=".GeofenceReceiver"
