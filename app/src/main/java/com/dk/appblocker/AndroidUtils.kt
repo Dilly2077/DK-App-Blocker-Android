@@ -1,12 +1,17 @@
 package com.dk.appblocker
 
+import android.app.Activity
 import android.app.AppOpsManager
+import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.CancellationSignal
 import android.os.Process
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -43,6 +48,73 @@ fun installedLaunchableApps(context: Context): List<InstalledApp> {
         .filter { it.packageName != context.packageName }
         .distinctBy { it.packageName }
         .sortedBy { it.label.lowercase() }
+}
+
+fun deviceAdminComponent(context: Context): ComponentName =
+    ComponentName(context, StrictDeviceAdminReceiver::class.java)
+
+fun isDeviceAdminActive(context: Context): Boolean {
+    val manager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    return manager.isAdminActive(deviceAdminComponent(context))
+}
+
+fun requestDeviceAdmin(context: Context) {
+    val intent = Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN).apply {
+        putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, deviceAdminComponent(context))
+        putExtra(
+            DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+            "Strict Mode uses Android device administrator status to make uninstalling the blocker harder while protection is active."
+        )
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    context.startActivity(intent)
+}
+
+fun removeDeviceAdmin(context: Context) {
+    val manager = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
+    if (manager.isAdminActive(deviceAdminComponent(context))) {
+        manager.removeActiveAdmin(deviceAdminComponent(context))
+    }
+}
+
+fun launchBiometricVerification(
+    context: Context,
+    onSuccess: () -> Unit,
+    onError: (String) -> Unit
+) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
+        onError("Biometric verification requires Android 9 or newer.")
+        return
+    }
+    val activity = context as? Activity
+    if (activity == null) {
+        onError("Biometric verification is unavailable here.")
+        return
+    }
+    val executor = ContextCompat.getMainExecutor(context)
+    val cancellationSignal = CancellationSignal()
+    val prompt = android.hardware.biometrics.BiometricPrompt.Builder(activity)
+        .setTitle("Verify to disable Strict Mode")
+        .setSubtitle("Use your fingerprint or face")
+        .setNegativeButton("Cancel", executor) { _, _ -> onError("Verification cancelled") }
+        .build()
+    prompt.authenticate(
+        cancellationSignal,
+        executor,
+        object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) {
+                onSuccess()
+            }
+
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                onError(errString?.toString() ?: "Biometric verification failed")
+            }
+
+            override fun onAuthenticationFailed() {
+                onError("Biometric not recognised")
+            }
+        }
+    )
 }
 
 fun startOfTodayMillis(): Long {
