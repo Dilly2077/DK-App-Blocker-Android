@@ -41,8 +41,11 @@ object GeofenceManager {
     fun sync(context: Context, plans: List<BlockPlan> = Prefs.getPlans(context)) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
         val locationPlans = plans.filter {
-            it.enabled && it.triggerType == TriggerType.LOCATION &&
-                it.latitude in -90.0..90.0 && it.longitude in -180.0..180.0
+            it.enabled &&
+                it.triggerType == TriggerType.LOCATION &&
+                !(it.latitude == 0.0 && it.longitude == 0.0) &&
+                it.latitude in -90.0..90.0 &&
+                it.longitude in -180.0..180.0
         }
         val client: GeofencingClient = LocationServices.getGeofencingClient(context)
         val pi = pendingIntent(context)
