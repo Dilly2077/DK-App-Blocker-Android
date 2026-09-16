@@ -9,7 +9,7 @@ object RuleEngine {
     data class Match(val blocked: Boolean, val reason: String = "", val plan: BlockPlan? = null)
 
     fun shouldBlock(context: Context, packageName: String): Match {
-        if (packageName == context.packageName || packageName == "com.android.systemui") return Match(false)
+        if (packageName == context.packageName) return Match(false)
 
         val now = System.currentTimeMillis()
         if (Prefs.packageAllowedUntil(context, packageName) > now) return Match(false)
@@ -22,9 +22,7 @@ object RuleEngine {
         val plans = Prefs.getPlans(context)
         for (plan in plans) {
             if (!plan.enabled || packageName !in plan.packages) continue
-            if (isPlanActive(context, plan)) {
-                return Match(true, reasonFor(plan), plan)
-            }
+            if (isPlanActive(context, plan)) return Match(true, reasonFor(plan), plan)
         }
         return Match(false)
     }
@@ -43,9 +41,7 @@ object RuleEngine {
         val now = LocalDateTime.now()
         val day = now.dayOfWeek.value
         val minute = now.hour * 60 + now.minute
-
         if (plan.startMinute == plan.endMinute) return day in plan.days
-
         return if (plan.startMinute < plan.endMinute) {
             day in plan.days && minute in plan.startMinute until plan.endMinute
         } else {
@@ -59,7 +55,7 @@ object RuleEngine {
         TriggerType.SCHEDULE -> "${plan.name} · scheduled block"
         TriggerType.DAILY_LIMIT -> "${plan.name} · ${plan.dailyLimitMinutes}m daily limit reached"
         TriggerType.LOCATION -> "${plan.name} · location block"
-        TriggerType.MANUAL -> "${plan.name} · manually active"
+        TriggerType.MANUAL -> "${plan.name} · focus block"
     }
 
     fun usageTodayMillis(context: Context, packages: Collection<String>): Long {
@@ -91,28 +87,25 @@ object RuleEngine {
         }
 
         val now = System.currentTimeMillis()
-        foregroundStarts.forEach { (pkg, started) ->
-            totals[pkg] = (totals[pkg] ?: 0L) + (now - started).coerceAtLeast(0)
-        }
+        foregroundStarts.forEach { (pkg, started) -> totals[pkg] = (totals[pkg] ?: 0L) + (now - started).coerceAtLeast(0) }
         return totals.values.sum()
     }
 
-    fun topUsageToday(context: Context): List<UsageRow> {
+    fun topUsageToday(context: Context): List<UsageRow> = topUsage(context, startOfTodayMillis(), System.currentTimeMillis())
+
+    fun topUsage(context: Context, start: Long, end: Long): List<UsageRow> {
         if (!hasUsageAccess(context)) return emptyList()
         val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val stats = manager.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY,
-            startOfTodayMillis(),
-            System.currentTimeMillis()
-        ) ?: return emptyList()
+        val stats = manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end) ?: return emptyList()
         val pm = context.packageManager
         return stats
             .filter { it.totalTimeInForeground > 0 && it.packageName != context.packageName }
-            .map {
+            .groupBy { it.packageName }
+            .map { (packageName, rows) ->
                 val label = runCatching {
-                    pm.getApplicationLabel(pm.getApplicationInfo(it.packageName, 0)).toString()
-                }.getOrDefault(it.packageName)
-                UsageRow(label, it.packageName, it.totalTimeInForeground)
+                    pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+                }.getOrDefault(packageName)
+                UsageRow(label, packageName, rows.sumOf { it.totalTimeInForeground })
             }
             .sortedByDescending { it.millis }
     }

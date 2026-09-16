@@ -28,7 +28,12 @@ data class BlockPlan(
 data class StrictSettings(
     val enabled: Boolean = false,
     val pinHash: String = "",
-    val editCooldownMinutes: Int = 0
+    val editCooldownMinutes: Int = 0,
+    val blockRuleChanges: Boolean = true,
+    val preventUninstall: Boolean = true,
+    val blockDeviceSettings: Boolean = true,
+    val blockRecents: Boolean = true,
+    val blockSplitScreen: Boolean = true
 )
 
 data class BlockEvent(

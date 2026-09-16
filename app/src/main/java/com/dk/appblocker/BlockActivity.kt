@@ -4,9 +4,9 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -16,8 +16,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -89,40 +93,39 @@ private fun BlockedScreen(
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     val strictSettings = remember { Prefs.getStrict(context) }
+    val green = Color(0xFF35F47A)
 
     Box(
-        Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    listOf(Color(0xFF06142E), Color(0xFF020817), Color.Black)
-                )
-            )
-            .padding(28.dp)
+        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF03100A), Color(0xFF010402), Color.Black))).padding(24.dp)
     ) {
         Column(
             Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Box(
-                Modifier.size(120.dp).background(Color(0xFF102A52), CircleShape),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(Icons.Rounded.Lock, null, tint = Color(0xFF55B2FF), modifier = Modifier.size(56.dp))
+            Box(Modifier.size(170.dp), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.fillMaxSize()) {
+                    val stroke = 10.dp.toPx()
+                    val s = Size(size.width - stroke, size.height - stroke)
+                    drawCircle(Color(0x2229FF72), radius = size.minDimension / 2.15f)
+                    drawArc(Color(0xFF16442B), -90f, 360f, false, Offset(stroke / 2, stroke / 2), s, style = Stroke(stroke, cap = StrokeCap.Round))
+                    drawArc(brush = Brush.sweepGradient(listOf(Color(0xFF9BFFAF), green, Color(0xFF9BFFAF))), startAngle = -90f, sweepAngle = 320f, useCenter = false, topLeft = Offset(stroke / 2, stroke / 2), size = s, style = Stroke(stroke, cap = StrokeCap.Round))
+                }
+                Icon(Icons.Rounded.Lock, null, tint = green, modifier = Modifier.size(54.dp))
             }
-            Text("Blocked", color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold)
-            Text(appLabel, color = Color(0xFFBFDFFF), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
-            Text(reason, color = Color(0xFF9AA8BE), textAlign = TextAlign.Center, fontSize = 16.sp)
+            Text("Blocked", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+            Text(appLabel, color = Color(0xFFD8FFE3), fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+            Text(reason, color = Color(0xFF98A69E), textAlign = TextAlign.Center, fontSize = 14.sp)
 
             Button(
                 onClick = onHome,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(18.dp)
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = green, contentColor = Color.Black)
             ) {
                 Icon(Icons.Rounded.Home, null)
                 Spacer(Modifier.width(8.dp))
-                Text("Go home")
+                Text("Go home", fontWeight = FontWeight.Bold)
             }
 
             if (allowBreaks) {
@@ -131,12 +134,11 @@ private fun BlockedScreen(
                         if (strict && strictSettings.enabled && strictSettings.pinHash.isNotBlank()) showPin = true else onBreakGranted()
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text("Take a 5-minute break")
-                }
+                    shape = RoundedCornerShape(20.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3A5144))
+                ) { Text("Take a 5-minute break") }
             } else {
-                Text("Breaks are disabled for this strict rule.", color = Color(0xFF7E8BA1), fontSize = 13.sp)
+                Text("Breaks are disabled for this strict block.", color = Color(0xFF7D8C83), fontSize = 12.sp)
             }
         }
     }
@@ -159,9 +161,7 @@ private fun BlockedScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = {
-                    if (Prefs.checkPin(context, pin)) onBreakGranted() else error = true
-                }) { Text("Unlock 5 min") }
+                TextButton(onClick = { if (Prefs.checkPin(context, pin)) onBreakGranted() else error = true }) { Text("Unlock 5 min", color = green) }
             },
             dismissButton = { TextButton(onClick = { showPin = false }) { Text("Cancel") } }
         )

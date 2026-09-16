@@ -33,7 +33,16 @@ object Prefs {
 
     fun getStrict(context: Context): StrictSettings {
         val json = p(context).getString(KEY_STRICT, null) ?: return StrictSettings()
-        return runCatching { gson.fromJson(json, StrictSettings::class.java) }.getOrDefault(StrictSettings())
+        return runCatching {
+            val parsed = gson.fromJson(json, StrictSettings::class.java) ?: StrictSettings()
+            parsed.copy(
+                blockRuleChanges = if (json.contains("blockRuleChanges")) parsed.blockRuleChanges else true,
+                preventUninstall = if (json.contains("preventUninstall")) parsed.preventUninstall else true,
+                blockDeviceSettings = if (json.contains("blockDeviceSettings")) parsed.blockDeviceSettings else true,
+                blockRecents = if (json.contains("blockRecents")) parsed.blockRecents else true,
+                blockSplitScreen = if (json.contains("blockSplitScreen")) parsed.blockSplitScreen else true
+            )
+        }.getOrDefault(StrictSettings())
     }
 
     fun saveStrict(context: Context, settings: StrictSettings) {
@@ -77,10 +86,7 @@ object Prefs {
 
     fun startFocus(context: Context, packages: Set<String>, durationMinutes: Int) {
         val end = System.currentTimeMillis() + durationMinutes * 60_000L
-        p(context).edit()
-            .putLong(KEY_FOCUS_END, end)
-            .putStringSet(KEY_FOCUS_PACKAGES, packages)
-            .apply()
+        p(context).edit().putLong(KEY_FOCUS_END, end).putStringSet(KEY_FOCUS_PACKAGES, packages).apply()
     }
 
     fun stopFocus(context: Context) {
@@ -88,16 +94,13 @@ object Prefs {
     }
 
     fun focusEnd(context: Context): Long = p(context).getLong(KEY_FOCUS_END, 0L)
-
-    fun focusPackages(context: Context): Set<String> =
-        p(context).getStringSet(KEY_FOCUS_PACKAGES, emptySet())?.toSet() ?: emptySet()
+    fun focusPackages(context: Context): Set<String> = p(context).getStringSet(KEY_FOCUS_PACKAGES, emptySet())?.toSet() ?: emptySet()
 
     fun allowPackageUntil(context: Context, pkg: String, until: Long) {
         p(context).edit().putLong(KEY_ALLOW_UNTIL_PREFIX + pkg, until).apply()
     }
 
-    fun packageAllowedUntil(context: Context, pkg: String): Long =
-        p(context).getLong(KEY_ALLOW_UNTIL_PREFIX + pkg, 0L)
+    fun packageAllowedUntil(context: Context, pkg: String): Long = p(context).getLong(KEY_ALLOW_UNTIL_PREFIX + pkg, 0L)
 
     fun setEditLockedUntil(context: Context, until: Long) {
         p(context).edit().putLong(KEY_EDIT_LOCKED_UNTIL, until).apply()
@@ -106,11 +109,7 @@ object Prefs {
     fun editLockedUntil(context: Context): Long = p(context).getLong(KEY_EDIT_LOCKED_UNTIL, 0L)
 
     fun exportJson(context: Context): String {
-        val payload = mapOf(
-            "version" to 1,
-            "plans" to getPlans(context),
-            "strict" to getStrict(context)
-        )
+        val payload = mapOf("version" to 2, "plans" to getPlans(context), "strict" to getStrict(context))
         return gson.toJson(payload)
     }
 }
