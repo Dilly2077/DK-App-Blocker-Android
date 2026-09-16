@@ -9,6 +9,7 @@ object Prefs {
     private const val NAME = "dk_blocker_prefs"
     private const val KEY_PLANS = "plans"
     private const val KEY_STRICT = "strict"
+    private const val KEY_BLOCK_SCREEN = "block_screen"
     private const val KEY_GEOFENCES = "active_geofences"
     private const val KEY_EVENTS = "block_events"
     private const val KEY_FOCUS_END = "focus_end"
@@ -33,20 +34,43 @@ object Prefs {
 
     fun getStrict(context: Context): StrictSettings {
         val json = p(context).getString(KEY_STRICT, null) ?: return StrictSettings()
-        return runCatching {
-            val parsed = gson.fromJson(json, StrictSettings::class.java) ?: StrictSettings()
-            parsed.copy(
-                blockRuleChanges = if (json.contains("blockRuleChanges")) parsed.blockRuleChanges else true,
-                preventUninstall = if (json.contains("preventUninstall")) parsed.preventUninstall else true,
-                blockDeviceSettings = if (json.contains("blockDeviceSettings")) parsed.blockDeviceSettings else true,
-                blockRecents = if (json.contains("blockRecents")) parsed.blockRecents else true,
-                blockSplitScreen = if (json.contains("blockSplitScreen")) parsed.blockSplitScreen else true
-            )
-        }.getOrDefault(StrictSettings())
+        val parsed = runCatching { gson.fromJson(json, StrictSettings::class.java) ?: StrictSettings() }
+            .getOrDefault(StrictSettings())
+        var normalized = parsed.copy(
+            blockRuleChanges = if (json.contains("blockRuleChanges")) parsed.blockRuleChanges else true,
+            preventUninstall = if (json.contains("preventUninstall")) parsed.preventUninstall else true,
+            blockDeviceSettings = if (json.contains("blockDeviceSettings")) parsed.blockDeviceSettings else true,
+            blockRecents = if (json.contains("blockRecents")) parsed.blockRecents else true,
+            blockSplitScreen = if (json.contains("blockSplitScreen")) parsed.blockSplitScreen else true,
+            unlockMethod = parsed.unlockMethod?.takeIf { it in setOf("TIMER", "PASSWORD", "BIOMETRIC") } ?: "PASSWORD",
+            timerDurationMinutes = parsed.timerDurationMinutes.takeIf { it in 5..1440 } ?: 60
+        )
+        if (normalized.enabled && normalized.unlockMethod == "TIMER" && normalized.lockUntil in 1..System.currentTimeMillis()) {
+            normalized = normalized.copy(enabled = false, lockUntil = 0L)
+            saveStrict(context, normalized)
+        }
+        return normalized
     }
 
     fun saveStrict(context: Context, settings: StrictSettings) {
         p(context).edit().putString(KEY_STRICT, gson.toJson(settings)).apply()
+    }
+
+    fun getBlockScreen(context: Context): BlockScreenSettings {
+        val json = p(context).getString(KEY_BLOCK_SCREEN, null) ?: return BlockScreenSettings()
+        return runCatching {
+            val parsed = gson.fromJson(json, BlockScreenSettings::class.java) ?: BlockScreenSettings()
+            parsed.copy(
+                title = parsed.title.ifBlank { "Blocked" },
+                message = parsed.message.ifBlank { "Stay focused. {app} is blocked right now." },
+                backgroundHex = parsed.backgroundHex.ifBlank { "#020604" },
+                accentHex = parsed.accentHex.ifBlank { "#35F47A" }
+            )
+        }.getOrDefault(BlockScreenSettings())
+    }
+
+    fun saveBlockScreen(context: Context, settings: BlockScreenSettings) {
+        p(context).edit().putString(KEY_BLOCK_SCREEN, gson.toJson(settings)).apply()
     }
 
     fun hashPin(pin: String): String {
@@ -109,7 +133,12 @@ object Prefs {
     fun editLockedUntil(context: Context): Long = p(context).getLong(KEY_EDIT_LOCKED_UNTIL, 0L)
 
     fun exportJson(context: Context): String {
-        val payload = mapOf("version" to 2, "plans" to getPlans(context), "strict" to getStrict(context))
+        val payload = mapOf(
+            "version" to 3,
+            "plans" to getPlans(context),
+            "strict" to getStrict(context),
+            "blockScreen" to getBlockScreen(context)
+        )
         return gson.toJson(payload)
     }
 }
