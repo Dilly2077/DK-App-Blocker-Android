@@ -1,12 +1,14 @@
 package com.dk.appblocker
 
 import android.content.Intent
+import android.graphics.Color as AndroidColor
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -16,12 +18,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -48,6 +46,11 @@ class BlockActivity : ComponentActivity() {
         render()
     }
 
+    private fun goHome() {
+        startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        finish()
+    }
+
     private fun render() {
         val blockedPackage = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
         val reason = intent.getStringExtra(EXTRA_REASON) ?: "Blocked by a rule"
@@ -56,21 +59,21 @@ class BlockActivity : ComponentActivity() {
         val label = runCatching {
             val info = packageManager.getApplicationInfo(blockedPackage, 0)
             packageManager.getApplicationLabel(info).toString()
-        }.getOrDefault(blockedPackage)
+        }.getOrDefault(blockedPackage.ifBlank { "This app" })
 
         setContent {
             DKTheme {
+                BackHandler { goHome() }
                 BlockedScreen(
                     appLabel = label,
                     reason = reason,
                     strict = strict,
                     allowBreaks = allowBreaks,
-                    onHome = {
-                        startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        finish()
-                    },
+                    onHome = ::goHome,
                     onBreakGranted = {
-                        Prefs.allowPackageUntil(this, blockedPackage, System.currentTimeMillis() + 5 * 60_000L)
+                        if (blockedPackage.isNotBlank()) {
+                            Prefs.allowPackageUntil(this, blockedPackage, System.currentTimeMillis() + 5 * 60_000L)
+                        }
                         finish()
                     }
                 )
@@ -78,6 +81,9 @@ class BlockActivity : ComponentActivity() {
         }
     }
 }
+
+private fun colorFromHex(hex: String, fallback: Int): Color =
+    runCatching { Color(AndroidColor.parseColor(hex)) }.getOrElse { Color(fallback) }
 
 @Composable
 private fun BlockedScreen(
@@ -89,39 +95,48 @@ private fun BlockedScreen(
     onBreakGranted: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var showPin by remember { mutableStateOf(false) }
-    var pin by remember { mutableStateOf("") }
-    var error by remember { mutableStateOf(false) }
+    val settings = remember { Prefs.getBlockScreen(context) }
     val strictSettings = remember { Prefs.getStrict(context) }
-    val green = Color(0xFF35F47A)
+    var showPassword by remember { mutableStateOf(false) }
+    var password by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf(false) }
+    var biometricError by remember { mutableStateOf("") }
+
+    val background = colorFromHex(settings.backgroundHex, 0xFF020604.toInt())
+    val accent = colorFromHex(settings.accentHex, 0xFF35F47A.toInt())
+    val message = settings.message
+        .replace("{app}", appLabel)
+        .replace("{reason}", reason)
 
     Box(
-        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF03100A), Color(0xFF010402), Color.Black))).padding(24.dp)
+        Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(background, background.copy(alpha = .96f), Color.Black)))
+            .padding(28.dp)
     ) {
         Column(
             Modifier.align(Alignment.Center),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            Box(Modifier.size(170.dp), contentAlignment = Alignment.Center) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val stroke = 10.dp.toPx()
-                    val s = Size(size.width - stroke, size.height - stroke)
-                    drawCircle(Color(0x2229FF72), radius = size.minDimension / 2.15f)
-                    drawArc(Color(0xFF16442B), -90f, 360f, false, Offset(stroke / 2, stroke / 2), s, style = Stroke(stroke, cap = StrokeCap.Round))
-                    drawArc(brush = Brush.sweepGradient(listOf(Color(0xFF9BFFAF), green, Color(0xFF9BFFAF))), startAngle = -90f, sweepAngle = 320f, useCenter = false, topLeft = Offset(stroke / 2, stroke / 2), size = s, style = Stroke(stroke, cap = StrokeCap.Round))
-                }
-                Icon(Icons.Rounded.Lock, null, tint = green, modifier = Modifier.size(54.dp))
+            Box(
+                Modifier.size(120.dp).background(accent.copy(alpha = .15f), CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Rounded.Lock, null, tint = accent, modifier = Modifier.size(56.dp))
             }
-            Text("Blocked", color = Color.White, fontSize = 32.sp, fontWeight = FontWeight.Bold)
-            Text(appLabel, color = Color(0xFFD8FFE3), fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
-            Text(reason, color = Color(0xFF98A69E), textAlign = TextAlign.Center, fontSize = 14.sp)
+            Text(settings.title, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            if (settings.showAppName) {
+                Text(appLabel, color = accent, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
+            }
+            Text(message, color = Color(0xFFC1CCC5), textAlign = TextAlign.Center, fontSize = 16.sp)
+            Text(reason, color = Color(0xFF7F9086), textAlign = TextAlign.Center, fontSize = 12.sp)
 
             Button(
                 onClick = onHome,
                 modifier = Modifier.fillMaxWidth().height(56.dp),
-                shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = green, contentColor = Color.Black)
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.Black)
             ) {
                 Icon(Icons.Rounded.Home, null)
                 Spacer(Modifier.width(8.dp))
@@ -131,39 +146,59 @@ private fun BlockedScreen(
             if (allowBreaks) {
                 OutlinedButton(
                     onClick = {
-                        if (strict && strictSettings.enabled && strictSettings.pinHash.isNotBlank()) showPin = true else onBreakGranted()
+                        if (!strict || !strictSettings.enabled) {
+                            onBreakGranted()
+                        } else {
+                            when (strictSettings.unlockMethod ?: "PASSWORD") {
+                                "BIOMETRIC" -> launchBiometricVerification(
+                                    context,
+                                    onSuccess = onBreakGranted,
+                                    onError = { biometricError = it }
+                                )
+                                "TIMER" -> biometricError = "Breaks are unavailable while timer-based Strict Mode is active."
+                                else -> showPassword = true
+                            }
+                        }
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
-                    shape = RoundedCornerShape(20.dp),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF3A5144))
-                ) { Text("Take a 5-minute break") }
+                    shape = RoundedCornerShape(18.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, accent)
+                ) {
+                    Text("Take a 5-minute break", color = Color.White)
+                }
+                if (biometricError.isNotBlank()) {
+                    Text(biometricError, color = Color(0xFFFF8A84), fontSize = 12.sp, textAlign = TextAlign.Center)
+                }
             } else {
-                Text("Breaks are disabled for this strict block.", color = Color(0xFF7D8C83), fontSize = 12.sp)
+                Text("Breaks are disabled for this rule.", color = Color(0xFF7E8BA1), fontSize = 13.sp)
             }
         }
     }
 
-    if (showPin) {
+    if (showPassword) {
         AlertDialog(
-            onDismissRequest = { showPin = false },
-            title = { Text("Enter Strict Mode PIN") },
+            onDismissRequest = { showPassword = false },
+            title = { Text("Verify Strict Mode") },
             text = {
                 Column {
                     OutlinedTextField(
-                        value = pin,
-                        onValueChange = { pin = it.filter(Char::isDigit).take(8); error = false },
+                        value = password,
+                        onValueChange = { password = it.take(64); error = false },
                         singleLine = true,
                         isError = error,
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                        visualTransformation = PasswordVisualTransformation()
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        visualTransformation = PasswordVisualTransformation(),
+                        placeholder = { Text("Password") }
                     )
-                    if (error) Text("Incorrect PIN", color = MaterialTheme.colorScheme.error)
+                    if (error) Text("Incorrect password", color = MaterialTheme.colorScheme.error)
                 }
             },
             confirmButton = {
-                TextButton(onClick = { if (Prefs.checkPin(context, pin)) onBreakGranted() else error = true }) { Text("Unlock 5 min", color = green) }
+                TextButton(onClick = {
+                    if (Prefs.checkPin(context, password)) onBreakGranted() else error = true
+                }) { Text("Unlock 5 min") }
             },
-            dismissButton = { TextButton(onClick = { showPin = false }) { Text("Cancel") } }
+            dismissButton = { TextButton(onClick = { showPassword = false }) { Text("Cancel") } }
         )
     }
 }
