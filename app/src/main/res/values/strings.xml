@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">DK App Blocker</string>
+    <string name="accessibility_description">Blocks selected apps when your schedules, limits, focus sessions or location rules are active.</string>
+</resources>
