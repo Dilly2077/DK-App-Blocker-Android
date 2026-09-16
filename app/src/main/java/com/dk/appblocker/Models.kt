@@ -33,7 +33,18 @@ data class StrictSettings(
     val preventUninstall: Boolean = true,
     val blockDeviceSettings: Boolean = true,
     val blockRecents: Boolean = true,
-    val blockSplitScreen: Boolean = true
+    val blockSplitScreen: Boolean = true,
+    val unlockMethod: String? = "PASSWORD",
+    val timerDurationMinutes: Int = 60,
+    val lockUntil: Long = 0L
+)
+
+data class BlockScreenSettings(
+    val title: String = "Blocked",
+    val message: String = "Stay focused. {app} is blocked right now.",
+    val backgroundHex: String = "#020604",
+    val accentHex: String = "#35F47A",
+    val showAppName: Boolean = true
 )
 
 data class BlockEvent(
