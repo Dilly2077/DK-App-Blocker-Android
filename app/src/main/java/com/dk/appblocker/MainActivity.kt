@@ -16,6 +16,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -41,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -199,6 +201,28 @@ private fun MainShell(
             Modifier.fillMaxSize()
                 .background(Brush.verticalGradient(listOf(Ink2, Ink, Color.Black), endY = 900f))
                 .padding(inner)
+                .pointerInput(tab) {
+                    var horizontalTravel = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { horizontalTravel = 0f },
+                        onHorizontalDrag = { change, delta ->
+                            horizontalTravel += delta
+                            change.consume()
+                        },
+                        onDragEnd = {
+                            val tabs = MainTab.entries
+                            val index = tabs.indexOf(tab)
+                            val next = when {
+                                horizontalTravel < -90f -> tabs.getOrNull(index + 1)
+                                horizontalTravel > 90f -> tabs.getOrNull(index - 1)
+                                else -> null
+                            }
+                            next?.let(onTab)
+                            horizontalTravel = 0f
+                        },
+                        onDragCancel = { horizontalTravel = 0f }
+                    )
+                }
         ) {
             when (tab) {
                 MainTab.HOME -> HomeScreen(plans, tick, onCreateRule, onEdit, onStrict)
