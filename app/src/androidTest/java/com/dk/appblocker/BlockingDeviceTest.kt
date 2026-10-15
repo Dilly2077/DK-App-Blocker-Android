@@ -52,7 +52,7 @@ class BlockingDeviceTest {
         Prefs.savePlans(context, listOf(BlockPlan(name = "Device test", triggerType = TriggerType.MANUAL,
             packages = listOf(fixturePackage), manualActive = true, allowBreaks = breaks)))
     }
-    private fun openFixture() { shell("am start -W -n $fixturePackage/com.dk.appblocker.FixtureActivity") }
+    private fun openFixture(keyboard: Boolean = false) { shell("am start -W -n $fixturePackage/com.dk.appblocker.FixtureActivity --ez keyboard $keyboard") }
     private fun blocked() = device.wait(Until.hasObject(By.text("Blocked")), 8000)
 
     @Test fun realExternalAppBlocksAndBackAndHomeEscapeWithoutTrapping() {
@@ -98,6 +98,13 @@ class BlockingDeviceTest {
         assertTrue(device.wait(Until.hasObject(By.text("Focus now")), 8000))
         assertTrue(device.hasObject(By.textStartsWith("Custom ")))
         assertTrue(device.takeScreenshot(java.io.File(context.getExternalFilesDir(null), "custom-blocking.png")))
+    }
+    @Test fun keyboardDoesNotBypassExpiredBreak() {
+        configure(true)
+        val match = RuleEngine.shouldBlock(context, fixturePackage)
+        Prefs.allowPackageUntil(context, fixturePackage, System.currentTimeMillis() + 1800, match.policyToken)
+        openFixture(true)
+        assertTrue("Keyboard must not suppress break-expiry enforcement", blocked())
     }
     @Test fun disabledRuleAllowsActualApp() {
         configure()

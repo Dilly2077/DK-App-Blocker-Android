@@ -45,7 +45,7 @@ class BlockAccessibilityService : AccessibilityService() {
         if (!(getSystemService(POWER_SERVICE) as PowerManager).isInteractive) return
         if ((getSystemService(KEYGUARD_SERVICE) as KeyguardManager).isKeyguardLocked) return
         val current = runCatching { windows }.getOrDefault(emptyList())
-        val foreground = current.firstOrNull { it.isActive || it.isFocused } ?: return
+        val foreground = current.firstOrNull { (it.isActive || it.isFocused) && it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD } ?: return
         val activePackage = foreground.root?.packageName?.toString() ?: return
         if (isRecoveryPackage(this, activePackage) ||
             foreground.type != AccessibilityWindowInfo.TYPE_APPLICATION) return
@@ -53,7 +53,9 @@ class BlockAccessibilityService : AccessibilityService() {
             .mapNotNull { it.root?.packageName?.toString() }.distinct()
         for (pkg in candidates) {
             val match = withContext(Dispatchers.Default) { RuleEngine.shouldBlock(this@BlockAccessibilityService, pkg) }
-            val latest = runCatching { rootInActiveWindow?.packageName?.toString() }.getOrNull()
+            val latest = runCatching {
+                windows.firstOrNull { (it.isActive || it.isFocused) && it.type != AccessibilityWindowInfo.TYPE_INPUT_METHOD }?.root?.packageName?.toString()
+            }.getOrNull()
             if (latest != activePackage) return
             if (match.blocked) { showBlocked(pkg, match); return }
         }

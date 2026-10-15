@@ -47,7 +47,7 @@ class PrefsAndRulesTest {
         assertFalse(RuleEngine.shouldBlock(context, pkg).blocked)
     }
     @Test fun recoveryPackagesStayAllowedEvenWhenExplicitlyConfigured() {
-        listOf(context.packageName, "com.android.settings", "com.android.systemui", "com.android.permissioncontroller").forEach {
+        listOf(context.packageName, "com.android.settings", "com.android.systemui", "com.android.permissioncontroller", "com.android.phone", "com.android.server.telecom").forEach {
             Prefs.savePlans(context, listOf(manual().copy(packages = listOf(it))))
             assertFalse(RuleEngine.shouldBlock(context, it).blocked)
         }
