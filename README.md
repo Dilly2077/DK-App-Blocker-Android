@@ -26,9 +26,11 @@ Location rules require Location permission; for reliable background geofence tra
 
 ## Install / APK
 
-Every push to `main` runs compilation, all unit tests, debug/release lint, APK signature checks and installation/instrumentation on Android 8 (three-button navigation) and Android 15 (gestural navigation). The exact tested APK is published only when all checks pass. In GitHub, open **Actions → Build Android APK → latest successful run → Artifacts** and download `DK-App-Blocker-debug-apk`. It contains `app-debug.apk` and its SHA-256 checksum. Test/lint reports and device logs/screenshots are separate artifacts.
+Builds run locally on the PC hosting this workspace. Download locally built APKs from [GitHub Releases](https://github.com/Dilly2077/DK-App-Blocker-Android/releases). The [0.3.0 local-build release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.0-local) contains the installable debug app, the unsigned release validation APK, the instrumentation-only test APK and SHA-256 checksums. Use `DK-App-Blocker-0.3.0-local.apk` for normal installation. The unsigned release APK requires signing; the test APK is not the app.
 
-The artifact ZIP contains `app-debug.apk`, which can be sideloaded on Android after enabling installation from the browser/file manager you use to open it.
+The signed debug APK can be sideloaded after enabling installation from the browser/file manager used to open it. Reuse the same local signing key for future compatible updates. A differently signed previous build can require uninstalling first, deleting its local data.
+
+Automatic push and pull-request builds are disabled. The retained GitHub Actions workflow is manual-only and requires explicit user authorisation for a cloud-build exception. Creating a Release and uploading already-built APKs does not trigger this workflow. The tracked [AGENTS.md](AGENTS.md) makes the local-build policy permanent for future sessions in this repository. Historical Actions reports remain evidence of earlier verification, not the current build procedure.
 
 ## First-run setup
 

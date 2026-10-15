@@ -1,9 +1,8 @@
-name: Build Android APK
+name: Android APK — manual cloud-build exception only
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
+  # Local builds are mandatory by default. Dispatch only after explicit user authorisation.
+  # No push, pull-request, tag or release events may trigger compilation automatically.
   workflow_dispatch:
 
 concurrency:
