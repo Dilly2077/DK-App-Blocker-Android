@@ -6,7 +6,7 @@ apk=$(find "$1" -name app-debug.apk -print -quit)
 tests=$(find "$1" -name app-debug-androidTest.apk -print -quit)
 adb install -r "$apk" | tee device-results/install.txt
 grep -q Success device-results/install.txt
-adb install -r "$tests"
+adb install -r -t "$tests"
 if [[ "$2" == gestural ]]; then
   adb shell cmd overlay enable-exclusive --category com.android.internal.systemui.navbar.gestural
   adb shell cmd overlay list | tee device-results/navigation.txt
