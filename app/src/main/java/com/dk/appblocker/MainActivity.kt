@@ -16,7 +16,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -58,6 +59,13 @@ import com.google.android.gms.tasks.CancellationTokenSource
 import java.time.LocalDate
 import java.time.ZoneId
 import kotlin.math.roundToInt
+import androidx.fragment.app.FragmentActivity
+import androidx.biometric.BiometricManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.compose.ui.platform.testTag
 
 private val Ink = Color(0xFF020604)
 private val Ink2 = Color(0xFF07110C)
@@ -89,10 +97,14 @@ fun DKTheme(content: @Composable () -> Unit) {
     )
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { DKTheme { AppRoot() } }
+    }
+    override fun onResume() {
+        super.onResume()
+        GeofenceManager.sync(this)
     }
 }
 
@@ -136,13 +148,14 @@ private fun AppRoot() {
     when (route) {
         Route.CREATE_TYPE -> CreateRuleTypeScreen(
             onBack = { route = Route.MAIN },
-            onType = { type -> editing = defaultPlanFor(type); route = Route.EDITOR },
+            onType = { type -> if (Prefs.canEditRules(context)) { editing = defaultPlanFor(type); route = Route.EDITOR } else route = Route.STRICT },
             onStrict = { route = Route.STRICT }
         )
         Route.EDITOR -> RuleEditorScreen(
             initial = editing ?: defaultPlanFor(TriggerType.SCHEDULE),
             onBack = { route = Route.CREATE_TYPE },
             onSave = { plan ->
+                if (!Prefs.canEditRules(context)) { route = Route.STRICT; return@RuleEditorScreen }
                 val updated = Prefs.getPlans(context)
                 val index = updated.indexOfFirst { it.id == plan.id }
                 if (index >= 0) updated[index] = plan else updated.add(plan)
@@ -162,14 +175,10 @@ private fun AppRoot() {
             tab = tab,
             plans = plans,
             tick = tick,
-            onTab = { chosen ->
-                val strict = Prefs.getStrict(context)
-                if (chosen == MainTab.RULES && strict.enabled && strict.blockRuleChanges) route = Route.STRICT else tab = chosen
-            },
-            onCreateRule = { route = Route.CREATE_TYPE },
+            onTab = { chosen -> tab = chosen },
+            onCreateRule = { route = if (Prefs.canEditRules(context)) Route.CREATE_TYPE else Route.STRICT },
             onEdit = { plan ->
-                val strict = Prefs.getStrict(context)
-                if (strict.enabled && strict.blockRuleChanges) route = Route.STRICT
+                if (!Prefs.canEditRules(context)) route = Route.STRICT
                 else { editing = plan; route = Route.EDITOR }
             },
             onStrict = { route = Route.STRICT },
@@ -196,35 +205,20 @@ private fun MainShell(
     onStrict: () -> Unit,
     onReload: () -> Unit
 ) {
+    val pager = rememberPagerState(initialPage = tab.ordinal) { MainTab.entries.size }
+    LaunchedEffect(tab) { if (pager.currentPage != tab.ordinal) pager.scrollToPage(tab.ordinal) }
+    LaunchedEffect(pager) {
+        snapshotFlow { pager.settledPage }.distinctUntilChanged().collect { onTab(MainTab.entries[it]) }
+    }
     Scaffold(containerColor = Ink, bottomBar = { MainBottomBar(tab, onTab) }) { inner ->
-        Box(
+        HorizontalPager(
+            state = pager,
+            modifier =
             Modifier.fillMaxSize()
                 .background(Brush.verticalGradient(listOf(Ink2, Ink, Color.Black), endY = 900f))
-                .padding(inner)
-                .pointerInput(tab) {
-                    var horizontalTravel = 0f
-                    detectHorizontalDragGestures(
-                        onDragStart = { horizontalTravel = 0f },
-                        onHorizontalDrag = { change, delta ->
-                            horizontalTravel += delta
-                            change.consume()
-                        },
-                        onDragEnd = {
-                            val tabs = MainTab.entries
-                            val index = tabs.indexOf(tab)
-                            val next = when {
-                                horizontalTravel < -90f -> tabs.getOrNull(index + 1)
-                                horizontalTravel > 90f -> tabs.getOrNull(index - 1)
-                                else -> null
-                            }
-                            next?.let(onTab)
-                            horizontalTravel = 0f
-                        },
-                        onDragCancel = { horizontalTravel = 0f }
-                    )
-                }
-        ) {
-            when (tab) {
+                .padding(inner).testTag("mainPager")
+        ) { page ->
+            when (MainTab.entries[page]) {
                 MainTab.HOME -> HomeScreen(plans, tick, onCreateRule, onEdit, onStrict)
                 MainTab.RULES -> RulesScreen(plans, onCreateRule, onEdit, onReload)
                 MainTab.INSIGHTS -> InsightsScreen(tick)
@@ -274,7 +268,13 @@ private fun HomeScreen(
     onStrict: () -> Unit
 ) {
     val context = LocalContext.current
-    val activePlans = remember(plans, tick / 30_000L) { plans.filter { it.enabled && RuleEngine.isPlanActive(context, it) } }
+    val activePlans by produceState(emptyList<BlockPlan>(), plans, tick / 30_000L) {
+        value = withContext(Dispatchers.Default) { plans.filter { it.enabled && RuleEngine.isPlanActive(context, it) } }
+    }
+    var showFocusApps by remember { mutableStateOf(false) }
+    var focusApps by remember { mutableStateOf(Prefs.focusPackages(context)) }
+    val focusRemaining = (Prefs.focusEnd(context) - tick).coerceAtLeast(0L)
+    if (showFocusApps) AppPickerDialog(focusApps, { showFocusApps = false }) { focusApps = it; showFocusApps = false }
     val accessReady = remember(tick / 3000L) { isAccessibilityEnabled(context) }
     val greeting = remember {
         when (java.time.LocalTime.now().hour) {
@@ -330,6 +330,17 @@ private fun HomeScreen(
             }
         }
         item {
+            LabeledCard("Quick focus", if (focusRemaining > 0) "${formatDuration(focusRemaining)} remaining" else "Choose distractions and start a timed session.") {
+                OutlinedButton(onClick = { showFocusApps = true }) { Text("Choose apps (${focusApps.size})") }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(25, 45, 60).forEach { minutes ->
+                        Button(onClick = { if (Prefs.canEditRules(context)) Prefs.startFocus(context, focusApps, minutes) else onStrict() }, enabled = focusApps.isNotEmpty()) { Text("${minutes}m") }
+                    }
+                }
+                if (focusRemaining > 0) TextButton(onClick = { if (Prefs.canEditRules(context)) Prefs.stopFocus(context) else onStrict() }) { Text("End focus session") }
+            }
+        }
+        item {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Active Rules", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = onCreateRule) { Text("See all", color = Green) }
@@ -337,7 +348,7 @@ private fun HomeScreen(
         }
         if (plans.isEmpty()) item { EmptyRuleCard(onCreateRule) }
         else items(plans.take(5), key = { it.id }) { plan ->
-            HomeRuleRow(plan, plan in activePlans) { if (plan.name.contains("Strict", true)) onStrict() else onEdit(plan) }
+                HomeRuleRow(plan, plan in activePlans) { onEdit(plan) }
         }
     }
 }
@@ -454,8 +465,7 @@ private fun RulesScreen(plans: List<BlockPlan>, onCreateRule: () -> Unit, onEdit
                     Switch(
                         checked = plan.enabled,
                         onCheckedChange = { enabled ->
-                            val strict = Prefs.getStrict(context)
-                            if (!strict.enabled || !strict.blockRuleChanges) {
+                            if (Prefs.canEditRules(context)) {
                                 val updated = plans.map { if (it.id == plan.id) it.copy(enabled = enabled) else it }
                                 Prefs.savePlans(context, updated); GeofenceManager.sync(context, updated); onReload()
                             }
@@ -484,7 +494,7 @@ private fun CreateRuleTypeScreen(onBack: () -> Unit, onType: (TriggerType) -> Un
             item { RuleTypeButton("☀️", "Schedule", "Block apps at specific times") { onType(TriggerType.SCHEDULE) } }
             item { RuleTypeButton("📍", "Location", "Block apps at certain places") { onType(TriggerType.LOCATION) } }
             item { RuleTypeButton("🍃", "Focus Mode", "Create distraction-free sessions") { onType(TriggerType.MANUAL) } }
-            item { RuleTypeButton("🔒", "Strict Mode", "Lock settings and prevent bypass") { onStrict() } }
+            item { RuleTypeButton("🔒", "Strict Mode", "Protect rule changes with recoverable verification") { onStrict() } }
         }
     }
 }
@@ -518,6 +528,7 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
     var manualActive by remember { mutableStateOf(initial.manualActive) }
     var showApps by remember { mutableStateOf(false) }
     var locationMessage by remember { mutableStateOf("") }
+    var locationConfigured by remember { mutableStateOf(initial.locationConfigured || lat != 0.0 || lon != 0.0) }
 
     fun fetchLocation() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return
@@ -525,13 +536,13 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
         LocationServices.getFusedLocationProviderClient(context)
             .getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, CancellationTokenSource().token)
             .addOnSuccessListener { loc ->
-                if (loc != null) { lat = loc.latitude; lon = loc.longitude; locationMessage = "Location saved" }
+                if (loc != null) { lat = loc.latitude; lon = loc.longitude; locationConfigured = true; locationMessage = "Location saved" }
                 else locationMessage = "Location unavailable"
             }
             .addOnFailureListener { locationMessage = "Could not get location" }
     }
 
-    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { if (it) fetchLocation() }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { if (it[Manifest.permission.ACCESS_FINE_LOCATION] == true) fetchLocation() else locationMessage = "Precise location is required" }
 
     ScreenBackground {
         Column(Modifier.fillMaxSize()) {
@@ -539,7 +550,7 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
                 IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, "Back") }
                 Text("${ruleEmoji(initial)}  ${initial.name}", fontSize = 19.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Rule name") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                 SettingCard("📱", "Apps to block", if (selectedApps.isEmpty()) "Choose apps" else "${selectedApps.size} apps selected") { showApps = true }
                 when (initial.triggerType) {
@@ -561,7 +572,9 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
                     }
                     TriggerType.LOCATION -> LabeledCard("Location block", "Block selected apps inside this radius.") {
                         Text(if (lat == 0.0 && lon == 0.0) "No location saved" else "${"%.5f".format(lat)}, ${"%.5f".format(lon)}", color = if (lat == 0.0 && lon == 0.0) Muted else Green)
-                        Button(onClick = { if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) fetchLocation() else locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }) { Text("📍 Use my current location") }
+                        Button(onClick = { if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) fetchLocation() else locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) }) { Text("📍 Use my current location") }
+                        Text("After granting precise location, open Android Settings → Permissions → Location → Allow all the time for background geofences.", color = Muted, fontSize = 12.sp)
+                        OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) }) { Text("Open location permissions") }
                         if (locationMessage.isNotBlank()) Text(locationMessage, color = Muted, fontSize = 12.sp)
                         Text("Radius ${radius.roundToInt()}m"); Slider(radius, { radius = it }, valueRange = 100f..1000f)
                     }
@@ -575,8 +588,8 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
                     ToggleRow("Allow 5-minute breaks", allowBreaks) { allowBreaks = it }
                 }
                 Button(
-                    onClick = { onSave(initial.copy(name = name.ifBlank { initial.name }, packages = selectedApps.toList(), enabled = enabled, strict = strict, allowBreaks = allowBreaks, days = days, startMinute = startMinute, endMinute = endMinute, dailyLimitMinutes = limit, latitude = lat, longitude = lon, radiusMeters = radius, manualActive = manualActive)) },
-                    enabled = selectedApps.isNotEmpty(),
+                    onClick = { onSave(initial.copy(name = name.ifBlank { initial.name }, packages = selectedApps.toList(), enabled = enabled, strict = strict, allowBreaks = allowBreaks, days = days, startMinute = startMinute, endMinute = endMinute, dailyLimitMinutes = limit, latitude = lat, longitude = lon, radiusMeters = radius, manualActive = manualActive, locationConfigured = locationConfigured)) },
+                    enabled = selectedApps.isNotEmpty() && (initial.triggerType != TriggerType.LOCATION || locationConfigured) && (initial.triggerType != TriggerType.SCHEDULE || days.isNotEmpty()),
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.Black),
                     shape = RoundedCornerShape(18.dp)
@@ -665,7 +678,7 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
 
     val adminActive = isDeviceAdminActive(context)
     val method = strict.unlockMethod ?: "PASSWORD"
-    val remaining = (strict.lockUntil - now).coerceAtLeast(0L)
+    val remaining = now.let { Prefs.strictRemaining(context) }
 
     fun save(updated: StrictSettings) {
         strict = updated
@@ -673,23 +686,26 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
     }
 
     fun activate() {
-        if (strict.preventUninstall && !isDeviceAdminActive(context)) {
-            requestDeviceAdmin(context)
-            notice = "Enable Device Administrator protection, then tap Activate again."
+        if (method in setOf("PASSWORD", "BIOMETRIC") && strict.pinHash.isBlank()) {
+            showPasswordSetup = true
+            notice = "Set a recovery password before activating verification."
             return
         }
-        if (method == "PASSWORD" && strict.pinHash.isBlank()) {
-            showPasswordSetup = true
-            notice = "Set a password before activating password verification."
+        if (method == "BIOMETRIC" && BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) != BiometricManager.BIOMETRIC_SUCCESS) {
+            notice = "Enrol a strong biometric in Android Settings first, or choose Password or Timer."
             return
         }
         val until = if (method == "TIMER") now + strict.timerDurationMinutes * 60_000L else 0L
-        save(strict.copy(enabled = true, lockUntil = until))
+        save(strict.copy(enabled = true, lockUntil = until,
+            lockElapsedEnd = if (method == "TIMER") android.os.SystemClock.elapsedRealtime() + strict.timerDurationMinutes * 60_000L else 0L,
+            lockBoot = Prefs.boot(context)))
         notice = "Strict Mode activated."
     }
 
     fun disableVerified() {
-        save(strict.copy(enabled = false, lockUntil = 0L))
+        val latest = Prefs.getStrict(context)
+        save(latest.copy(enabled = false, lockUntil = 0L))
+        Prefs.setEditLockedUntil(context, System.currentTimeMillis() + latest.editCooldownMinutes * 60_000L)
         notice = "Strict Mode disabled."
     }
 
@@ -735,24 +751,30 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
                             Text(if (strict.enabled) "Ends in ${formatDuration(remaining)}" else "Duration: ${strict.timerDurationMinutes} minutes", color = Green, fontWeight = FontWeight.Bold)
                             if (!strict.enabled) Slider(strict.timerDurationMinutes.toFloat(), { save(strict.copy(timerDurationMinutes = it.roundToInt().coerceIn(5, 240))) }, valueRange = 5f..240f)
                         }
-                        if (method == "PASSWORD" && !strict.enabled) {
+                        if (method in setOf("PASSWORD", "BIOMETRIC") && !strict.enabled) {
                             OutlinedButton(onClick = { showPasswordSetup = true }) { Text(if (strict.pinHash.isBlank()) "Set password" else "Change password") }
                         }
                         if (method == "BIOMETRIC") Text("Android will show the system biometric prompt when you try to disable Strict Mode.", color = Muted, fontSize = 12.sp)
+                        if (strict.enabled && method == "BIOMETRIC") OutlinedButton(onClick = { showPasswordUnlock = true }) { Text("Use recovery password") }
+                        if (!strict.enabled) {
+                            Text("Rule-edit cooldown after verified unlock: ${strict.editCooldownMinutes} minutes", color = Muted, fontSize = 12.sp)
+                            Slider(strict.editCooldownMinutes.toFloat(), { save(strict.copy(editCooldownMinutes = it.roundToInt())) }, valueRange = 0f..60f)
+                        }
+                        if (Prefs.editLockedUntil(context) > now) Text("Rule edits unlock in ${formatDuration(Prefs.editLockedUntil(context) - now)}", color = Green)
                     }
                 }
                 item {
                     Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                             StrictCheckRow(Icons.Rounded.List, "Lock rule changes in app", strict.blockRuleChanges, !strict.enabled) { save(strict.copy(blockRuleChanges = !strict.blockRuleChanges)) }
-                            StrictCheckRow(Icons.Rounded.NoAccounts, "Prevent app uninstalling", strict.preventUninstall, !strict.enabled) {
+                            StrictCheckRow(Icons.Rounded.NoAccounts, "Offer administrator removal confirmation", strict.preventUninstall, !strict.enabled) {
                                 val next = !strict.preventUninstall
                                 save(strict.copy(preventUninstall = next))
                                 if (next && !isDeviceAdminActive(context)) requestDeviceAdmin(context)
                             }
-                            StrictCheckRow(Icons.Rounded.Settings, "Block device settings", strict.blockDeviceSettings, !strict.enabled) { save(strict.copy(blockDeviceSettings = !strict.blockDeviceSettings)) }
-                            StrictCheckRow(Icons.Rounded.ViewCarousel, "Block recent apps", strict.blockRecents, !strict.enabled) { save(strict.copy(blockRecents = !strict.blockRecents)) }
-                            StrictCheckRow(Icons.Rounded.Splitscreen, "Block split screen", strict.blockSplitScreen, !strict.enabled) { save(strict.copy(blockSplitScreen = !strict.blockSplitScreen)) }
+                            StrictCheckRow(Icons.Rounded.Settings, "Confirm in-app settings shortcuts", strict.blockDeviceSettings, !strict.enabled) { save(strict.copy(blockDeviceSettings = !strict.blockDeviceSettings)) }
+                            StrictCheckRow(Icons.Rounded.ViewCarousel, "Return home from detected Recents", strict.blockRecents, !strict.enabled) { save(strict.copy(blockRecents = !strict.blockRecents)) }
+                            StrictCheckRow(Icons.Rounded.Splitscreen, "Return home from detected split controls", strict.blockSplitScreen, !strict.enabled) { save(strict.copy(blockSplitScreen = !strict.blockSplitScreen)) }
                         }
                     }
                 }
@@ -762,7 +784,7 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
                             Text("🛡️", fontSize = 25.sp); Spacer(Modifier.width(10.dp))
                             Column(Modifier.weight(1f)) { Text("Uninstall protection", fontWeight = FontWeight.Bold); Text(if (adminActive) "Device Administrator active" else "Device Administrator not enabled", color = Muted, fontSize = 12.sp) }
                             if (!adminActive) TextButton(onClick = { requestDeviceAdmin(context) }) { Text("Enable", color = Green) }
-                            else if (!strict.enabled) TextButton(onClick = { removeDeviceAdmin(context); notice = "Device Administrator removal requested." }) { Text("Remove") }
+                            else TextButton(onClick = { removeDeviceAdmin(context); notice = "Device Administrator removal requested." }) { Text("Remove") }
                         }
                     }
                 }
@@ -786,12 +808,13 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
                         Text(if (strict.enabled) when (method) { "TIMER" -> "Timer Locked"; "BIOMETRIC" -> "Verify & Disable"; else -> "Verify & Disable" } else "Activate Strict Mode", fontWeight = FontWeight.Bold)
                     }
                 }
-                item { Text("Device Administrator makes direct uninstall harder. Blocking Settings through Accessibility adds another layer, but Android still allows recovery methods such as safe mode, ADB, or administrator removal outside the app.", color = Muted, fontSize = 11.sp) }
+                item { OutlinedButton(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Recovery: open Android Accessibility") } }
+                item { Text("Android Settings, permissions, Home and emergency calling always stay available. Device Administrator cannot prevent uninstalling; remove it in Settings. Recents and split-screen controls vary by device and cannot be guaranteed. Temporary timers expire after reboot for recovery.", color = Muted, fontSize = 11.sp) }
             }
         }
     }
 
-    if (showPasswordSetup) PasswordSetupDialog(strict, { showPasswordSetup = false }) { save(it); showPasswordSetup = false }
+    if (showPasswordSetup) PasswordSetupDialog(strict, { showPasswordSetup = false }) { strict = Prefs.getStrict(context); showPasswordSetup = false }
     if (showPasswordUnlock) PasswordUnlockDialog({ showPasswordUnlock = false }) { disableVerified(); showPasswordUnlock = false }
 }
 
@@ -819,12 +842,28 @@ private fun StrictCheckRow(icon: ImageVector, label: String, checked: Boolean, e
 
 @Composable
 private fun PasswordSetupDialog(strict: StrictSettings, onDismiss: () -> Unit, onSave: (StrictSettings) -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var password by remember { mutableStateOf("") }
+    var current by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Strict Mode password") },
-        text = { OutlinedTextField(password, { password = it.take(64) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("At least 4 characters") }) },
-        confirmButton = { TextButton(onClick = { if (password.length >= 4) onSave(strict.copy(pinHash = Prefs.hashPin(password))) }, enabled = password.length >= 4) { Text("Save", color = Green) } },
+        text = { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (strict.pinHash.isNotBlank()) OutlinedTextField(current, { current = it.take(64); error = false }, label = { Text("Current password") }, singleLine = true, visualTransformation = PasswordVisualTransformation())
+            OutlinedTextField(password, { password = it.take(64) }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("New password, at least 4 characters") })
+            if (error) Text("Current password incorrect or temporarily locked. Retry after 30 seconds.", color = Danger)
+        } },
+        confirmButton = { TextButton(onClick = {
+            busy = true
+            scope.launch {
+                val changed = withContext(Dispatchers.Default) { Prefs.replacePin(context, current, password) }
+                busy = false
+                if (changed) onSave(Prefs.getStrict(context)) else error = true
+            }
+        }, enabled = password.length >= 4 && !busy) { Text(if (busy) "Saving…" else "Save", color = Green) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -832,13 +871,22 @@ private fun PasswordSetupDialog(strict: StrictSettings, onDismiss: () -> Unit, o
 @Composable
 private fun PasswordUnlockDialog(onDismiss: () -> Unit, onSuccess: () -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Disable Strict Mode") },
-        text = { Column { OutlinedTextField(password, { password = it.take(64); error = false }, singleLine = true, isError = error, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("Password") }); if (error) Text("Incorrect password", color = Danger, fontSize = 12.sp) } },
-        confirmButton = { TextButton(onClick = { if (Prefs.checkPin(context, password)) onSuccess() else error = true }) { Text("Disable", color = Green) } },
+        text = { Column { OutlinedTextField(password, { password = it.take(64); error = false }, singleLine = true, isError = error, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), visualTransformation = PasswordVisualTransformation(), placeholder = { Text("Password") }); if (error) Text("Incorrect password or temporarily locked. Five failures require a 30-second wait.", color = Danger, fontSize = 12.sp) } },
+        confirmButton = { TextButton(onClick = {
+            busy = true
+            scope.launch {
+                val valid = withContext(Dispatchers.Default) { Prefs.checkPin(context, password) }
+                busy = false
+                if (valid) onSuccess() else error = true
+            }
+        }, enabled = !busy) { Text(if (busy) "Verifying…" else "Disable", color = Green) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
 }
@@ -849,7 +897,16 @@ private fun InsightsScreen(tick: Long) {
     var selectedDays by remember { mutableIntStateOf(1) }
     val hasAccess = remember(tick / 5000L) { hasUsageAccess(context) }
     val start = remember(selectedDays, tick / 60_000L) { LocalDate.now().minusDays((selectedDays - 1).toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() }
-    val usage = remember(selectedDays, tick / 60_000L, hasAccess) { if (hasAccess) RuleEngine.topUsage(context, start, tick) else emptyList() }
+    val usage by produceState(emptyList<UsageRow>(), selectedDays, tick / 60_000L, hasAccess) {
+        value = withContext(Dispatchers.Default) { if (hasAccess) RuleEngine.topUsage(context, start, tick) else emptyList() }
+    }
+    val attempts = remember(tick / 5000L) {
+        val events = Prefs.getBlockEvents(context)
+        (6 downTo 0).map { daysAgo ->
+            val day = LocalDate.now().minusDays(daysAgo.toLong())
+            day.dayOfWeek.name.take(1) to events.count { epochDay(it.timestamp) == day }.toLong()
+        }
+    }
     val total = usage.sumOf { it.millis }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Row { Text("Insights", fontWeight = FontWeight.Bold, fontSize = 28.sp, modifier = Modifier.weight(1f)); Text("📅 Today") } }
@@ -860,11 +917,12 @@ private fun InsightsScreen(tick: Long) {
         }
         if (!hasAccess) item { PermissionCard("Screen-time access required", "Grant Usage Access for app limits and insights.", "Grant access") { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
         else {
-            item { Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(16.dp)) { Text("Screen Time", color = Muted); Text(formatDuration(total), fontSize = 36.sp, fontWeight = FontWeight.Bold); UsageBars(total) } } }
+            item { Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Panel)) { Column(Modifier.padding(16.dp)) { Text("Screen Time", color = Muted); Text(formatDuration(total), fontSize = 36.sp, fontWeight = FontWeight.Bold) } } }
             item { Text("Most used apps", fontWeight = FontWeight.Bold, fontSize = 18.sp) }
             if (usage.isEmpty()) item { Text("No usage data yet.", color = Muted) }
             else items(usage.take(8), key = { it.packageName }) { UsageRowCard(it, total) }
         }
+        item { LabeledCard("Blocked attempts · last 7 days", "${attempts.sumOf { it.second }} attempts (repeated launches within 30 seconds count once)") { BlockAttemptBars(attempts) } }
     }
 }
 
@@ -874,12 +932,14 @@ private fun PeriodPill(text: String, selected: Boolean, modifier: Modifier, onCl
 }
 
 @Composable
-private fun UsageBars(total: Long) {
-    val values = listOf(.55f, .18f, .12f, .3f, .22f, .45f, .32f, .52f, .66f, .41f, .23f, .76f)
+private fun BlockAttemptBars(attempts: List<Pair<String, Long>>) {
+    val maximum = (attempts.maxOfOrNull { it.second } ?: 0L).coerceAtLeast(1L)
+    val values = attempts.map { it.second.toFloat() / maximum }
     Canvas(Modifier.fillMaxWidth().height(100.dp)) {
         val gap = size.width / values.size
         values.forEachIndexed { i, v -> val w = gap * .34f; drawRoundRect(if (i == values.lastIndex - 1) Green else Color(0xFF233129), Offset(i * gap + gap * .33f, size.height * (1f - v)), Size(w, size.height * v), androidx.compose.ui.geometry.CornerRadius(w / 2, w / 2)) }
     }
+    Row(Modifier.fillMaxWidth()) { attempts.forEach { (label, count) -> Text("$label\n$count", modifier = Modifier.weight(1f), textAlign = TextAlign.Center, color = Muted, fontSize = 11.sp) } }
 }
 
 @Composable
@@ -900,15 +960,32 @@ private fun ProfileScreen(tick: Long, onStrict: () -> Unit) {
     val usage = remember(tick / 3000L) { hasUsageAccess(context) }
     val fine = remember(tick / 3000L) { ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED }
     val admin = remember(tick / 3000L) { isDeviceAdminActive(context) }
-    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { GeofenceManager.sync(context) }
+    var pendingSettings by remember { mutableStateOf<Intent?>(null) }
+    fun openSettings(intent: Intent) {
+        val strict = Prefs.getStrict(context)
+        if (strict.enabled && strict.blockDeviceSettings) pendingSettings = intent else context.startActivity(intent)
+    }
+    pendingSettings?.let { destination ->
+        AlertDialog(onDismissRequest = { pendingSettings = null }, title = { Text("Open Android Settings?") },
+            text = { Text("Strict Mode is active. Android recovery settings always remain available.") },
+            confirmButton = { TextButton(onClick = { pendingSettings = null; context.startActivity(destination) }) { Text("Continue") } },
+            dismissButton = { TextButton(onClick = { pendingSettings = null }) { Text("Cancel") } })
+    }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         item { Box(Modifier.size(90.dp).background(Color(0xFF174F2E), CircleShape), contentAlignment = Alignment.Center) { Text("D", fontSize = 48.sp) }; Text("DK", fontSize = 30.sp); Text("All features unlocked", color = Green, fontSize = 12.sp) }
         item { SettingCard("🎨", "Blocked screen", "Change colours, heading and message") { context.startActivity(Intent(context, BlockScreenSettingsActivity::class.java)) } }
         item { SettingCard("🔒", "Strict Mode", if (Prefs.getStrict(context).enabled) "Active" else "Configure advanced protections", onStrict) }
-        item { PermissionStatusRow("🛡️", "Accessibility", accessibility, "Needed to enforce app blocking") { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
-        item { PermissionStatusRow("📊", "Usage access", usage, "Needed for app limits and insights") { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
-        item { PermissionStatusRow("📍", "Precise location", fine, "Needed for location-based rules") { locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) } }
-        item { PermissionStatusRow("🔐", "Device Administrator", admin, "Used by uninstall protection in Strict Mode") { if (admin) Unit else requestDeviceAdmin(context) } }
+        item { PermissionStatusRow("🛡️", "Accessibility", accessibility, "Needed to enforce app blocking") { openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
+        item { PermissionStatusRow("📊", "Usage access", usage, "Needed for app limits and insights") { openSettings(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
+        item { PermissionStatusRow("📍", "Precise location", fine, "Needed for location-based rules") { locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)) } }
+        item { PermissionStatusRow("📍", "Background location", GeofenceManager.hasPermissions(context), Prefs.geofenceStatus(context)) { openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) } }
+        item { PermissionStatusRow("🔐", "Device Administrator", admin, "Optional removal confirmation; Android allows removal") { if (admin) removeDeviceAdmin(context) else requestDeviceAdmin(context) } }
+        item { SettingCard("📋", "Export local configuration", "Copy rules and appearance to clipboard; excludes credentials and history") {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("DK App Blocker configuration", Prefs.exportJson(context)))
+            android.widget.Toast.makeText(context, "Configuration copied", android.widget.Toast.LENGTH_SHORT).show()
+        } }
         item { Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF0B2718))) { Column(Modifier.padding(18.dp)) { Text("🌱 Local-first", fontWeight = FontWeight.Bold); Text("Rules, passwords, block-screen customisation and history stay on this device.", color = Muted, fontSize = 12.sp) } } }
     }
 }

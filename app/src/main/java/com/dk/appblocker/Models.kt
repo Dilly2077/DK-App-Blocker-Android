@@ -22,7 +22,8 @@ data class BlockPlan(
     val latitude: Double = 0.0,
     val longitude: Double = 0.0,
     val radiusMeters: Float = 150f,
-    val manualActive: Boolean = false
+    val manualActive: Boolean = false,
+    val locationConfigured: Boolean = false
 )
 
 data class StrictSettings(
@@ -36,7 +37,9 @@ data class StrictSettings(
     val blockSplitScreen: Boolean = true,
     val unlockMethod: String? = "PASSWORD",
     val timerDurationMinutes: Int = 60,
-    val lockUntil: Long = 0L
+    val lockUntil: Long = 0L,
+    val lockElapsedEnd: Long = 0L,
+    val lockBoot: Int = -1
 )
 
 data class BlockScreenSettings(

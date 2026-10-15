@@ -12,6 +12,9 @@ import android.os.CancellationSignal
 import android.os.Process
 import android.provider.Settings
 import androidx.core.content.ContextCompat
+import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
+import androidx.fragment.app.FragmentActivity
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -45,9 +48,24 @@ fun installedLaunchableApps(context: Context): List<InstalledApp> {
                 packageName = it.activityInfo.packageName
             )
         }
-        .filter { it.packageName != context.packageName }
+        .filter { !isRecoveryPackage(context, it.packageName) }
         .distinctBy { it.packageName }
         .sortedBy { it.label.lowercase() }
+}
+
+fun homePackages(context: Context): Set<String> = context.packageManager.queryIntentActivities(
+    Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY
+).map { it.activityInfo.packageName }.toSet()
+
+fun isRecoveryPackage(context: Context, pkg: String): Boolean {
+    if (pkg == context.packageName || pkg in setOf("android", "com.android.systemui", "com.android.settings",
+            "com.android.permissioncontroller", "com.google.android.permissioncontroller",
+            "com.android.packageinstaller", "com.google.android.packageinstaller", "com.android.emergency")) return true
+    if (pkg in homePackages(context)) return true
+    return listOf(Intent(Settings.ACTION_SETTINGS), Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+        Intent(Intent.ACTION_DIAL), Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)).any {
+        context.packageManager.resolveActivity(it, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName == pkg
+    }
 }
 
 fun deviceAdminComponent(context: Context): ComponentName =
@@ -63,7 +81,7 @@ fun requestDeviceAdmin(context: Context) {
         putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, deviceAdminComponent(context))
         putExtra(
             DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-            "Strict Mode uses Android device administrator status to make uninstalling the blocker harder while protection is active."
+            "Device administrator adds a removal confirmation. You can always remove it in Android Settings; it cannot prevent uninstalling."
         )
         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
@@ -82,39 +100,33 @@ fun launchBiometricVerification(
     onSuccess: () -> Unit,
     onError: (String) -> Unit
 ) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-        onError("Biometric verification requires Android 9 or newer.")
-        return
-    }
-    val activity = context as? Activity
+    val activity = context as? FragmentActivity
     if (activity == null) {
         onError("Biometric verification is unavailable here.")
         return
     }
-    val executor = ContextCompat.getMainExecutor(context)
-    val cancellationSignal = CancellationSignal()
-    val prompt = android.hardware.biometrics.BiometricPrompt.Builder(activity)
-        .setTitle("Verify to disable Strict Mode")
-        .setSubtitle("Use your fingerprint or face")
-        .setNegativeButton("Cancel", executor) { _, _ -> onError("Verification cancelled") }
-        .build()
-    prompt.authenticate(
-        cancellationSignal,
-        executor,
-        object : android.hardware.biometrics.BiometricPrompt.AuthenticationCallback() {
-            override fun onAuthenticationSucceeded(result: android.hardware.biometrics.BiometricPrompt.AuthenticationResult?) {
+    val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG
+    if (BiometricManager.from(context).canAuthenticate(authenticators) != BiometricManager.BIOMETRIC_SUCCESS) {
+        onError("Biometrics unavailable. Use your recovery password or Android Settings.")
+        return
+    }
+    val prompt = BiometricPrompt(activity, ContextCompat.getMainExecutor(context),
+        object : BiometricPrompt.AuthenticationCallback() {
+            override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 onSuccess()
             }
 
-            override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
-                onError(errString?.toString() ?: "Biometric verification failed")
+            override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                onError(errString.toString())
             }
 
             override fun onAuthenticationFailed() {
                 onError("Biometric not recognised")
             }
-        }
-    )
+        })
+    prompt.authenticate(BiometricPrompt.PromptInfo.Builder().setTitle("Verify Strict Mode")
+        .setSubtitle("Use your enrolled biometric").setAllowedAuthenticators(authenticators)
+        .setNegativeButtonText("Cancel").build())
 }
 
 fun startOfTodayMillis(): Long {

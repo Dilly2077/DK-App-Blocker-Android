@@ -4,7 +4,10 @@ import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import java.security.MessageDigest
+import android.os.SystemClock
+import android.provider.Settings
 
+@android.annotation.SuppressLint("ApplySharedPref") // Credentials and deadlines must be durable before returning success.
 object Prefs {
     private const val NAME = "dk_blocker_prefs"
     private const val KEY_PLANS = "plans"
@@ -24,7 +27,13 @@ object Prefs {
         val json = p(context).getString(KEY_PLANS, null) ?: return mutableListOf()
         return runCatching {
             val type = object : TypeToken<MutableList<BlockPlan>>() {}.type
-            gson.fromJson<MutableList<BlockPlan>>(json, type) ?: mutableListOf()
+            (gson.fromJson<MutableList<BlockPlan>>(json, type) ?: mutableListOf())
+                .filter { plan ->
+                    plan.id.isNotBlank() && plan.name.isNotBlank() && plan.triggerType in TriggerType.entries &&
+                        plan.packages.all { it.isNotBlank() } && plan.days.all { it in 1..7 } &&
+                        plan.startMinute in 0..1439 && plan.endMinute in 0..1439 &&
+                        plan.dailyLimitMinutes in 1..1440 && plan.latitude.isFinite() && plan.longitude.isFinite() && plan.radiusMeters.isFinite()
+                }.distinctBy { it.id }.toMutableList()
         }.getOrDefault(mutableListOf())
     }
 
@@ -37,6 +46,8 @@ object Prefs {
         val parsed = runCatching { gson.fromJson(json, StrictSettings::class.java) ?: StrictSettings() }
             .getOrDefault(StrictSettings())
         var normalized = parsed.copy(
+            pinHash = parsed.pinHash ?: "",
+            editCooldownMinutes = parsed.editCooldownMinutes.coerceIn(0, 60),
             blockRuleChanges = if (json.contains("blockRuleChanges")) parsed.blockRuleChanges else true,
             preventUninstall = if (json.contains("preventUninstall")) parsed.preventUninstall else true,
             blockDeviceSettings = if (json.contains("blockDeviceSettings")) parsed.blockDeviceSettings else true,
@@ -45,15 +56,26 @@ object Prefs {
             unlockMethod = parsed.unlockMethod?.takeIf { it in setOf("TIMER", "PASSWORD", "BIOMETRIC") } ?: "PASSWORD",
             timerDurationMinutes = parsed.timerDurationMinutes.takeIf { it in 5..1440 } ?: 60
         )
-        if (normalized.enabled && normalized.unlockMethod == "TIMER" && normalized.lockUntil in 1..System.currentTimeMillis()) {
-            normalized = normalized.copy(enabled = false, lockUntil = 0L)
+        if (normalized.enabled && normalized.unlockMethod == "PASSWORD" && normalized.pinHash.isBlank()) {
+            normalized = normalized.copy(enabled = false)
             saveStrict(context, normalized)
+        }
+        if (normalized.enabled && normalized.unlockMethod == "TIMER") {
+            if (normalized.lockBoot == -1) {
+                val remaining = (normalized.lockUntil - System.currentTimeMillis()).coerceIn(0L, normalized.timerDurationMinutes * 60_000L)
+                normalized = normalized.copy(lockElapsedEnd = SystemClock.elapsedRealtime() + remaining, lockBoot = boot(context))
+                saveStrict(context, normalized)
+            }
+            if (Deadline(normalized.lockUntil, normalized.lockElapsedEnd, normalized.lockBoot).remaining(SystemClock.elapsedRealtime(), boot(context)) == 0L) {
+                normalized = normalized.copy(enabled = false, lockUntil = 0L, lockElapsedEnd = 0L)
+                saveStrict(context, normalized)
+            }
         }
         return normalized
     }
 
     fun saveStrict(context: Context, settings: StrictSettings) {
-        p(context).edit().putString(KEY_STRICT, gson.toJson(settings)).apply()
+        p(context).edit().putString(KEY_STRICT, gson.toJson(settings)).commit()
     }
 
     fun getBlockScreen(context: Context): BlockScreenSettings {
@@ -73,16 +95,48 @@ object Prefs {
         p(context).edit().putString(KEY_BLOCK_SCREEN, gson.toJson(settings)).apply()
     }
 
-    fun hashPin(pin: String): String {
-        val bytes = MessageDigest.getInstance("SHA-256").digest(pin.toByteArray())
-        return bytes.joinToString("") { "%02x".format(it) }
-    }
+    fun hashPin(pin: String): String = CredentialHasher.hash(pin)
 
+    @Synchronized
     fun checkPin(context: Context, pin: String): Boolean {
+        if (remaining(context, "auth_retry") > 0) return false
         val stored = getStrict(context).pinHash
-        return stored.isNotBlank() && stored == hashPin(pin)
+        val valid = stored.isNotBlank() && CredentialHasher.verify(pin, stored)
+        if (valid) {
+            p(context).edit().remove("auth_failures").remove("auth_retry_deadline").commit()
+            if (CredentialHasher.needsMigration(stored)) saveStrict(context, getStrict(context).copy(pinHash = hashPin(pin)))
+        } else {
+            val failures = p(context).getInt("auth_failures", 0) + 1
+            p(context).edit().putInt("auth_failures", if (failures >= 5) 0 else failures).commit()
+            if (failures >= 5) putDeadline(context, "auth_retry", 30_000L)
+        }
+        return valid
     }
 
+    @Synchronized
+    fun replacePin(context: Context, old: String, replacement: String): Boolean {
+        if (replacement.length !in 4..64) return false
+        if (getStrict(context).pinHash.isNotBlank() && !checkPin(context, old)) return false
+        saveStrict(context, getStrict(context).copy(pinHash = hashPin(replacement)))
+        return true
+    }
+
+    fun boot(context: Context): Int = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, 0)
+    private fun putDeadline(context: Context, key: String, duration: Long) {
+        val bounded = duration.coerceIn(0L, 24 * 60 * 60_000L)
+        val deadline = Deadline(System.currentTimeMillis() + bounded, SystemClock.elapsedRealtime() + bounded, boot(context))
+        p(context).edit().putString(key + "_deadline", gson.toJson(deadline)).commit()
+    }
+    private fun remaining(context: Context, key: String): Long = runCatching {
+        gson.fromJson(p(context).getString(key + "_deadline", null), Deadline::class.java)
+            ?.remaining(SystemClock.elapsedRealtime(), boot(context)) ?: 0L
+    }.getOrDefault(0L)
+    fun strictRemaining(context: Context): Long = getStrict(context).let {
+        Deadline(it.lockUntil, it.lockElapsedEnd, it.lockBoot).remaining(SystemClock.elapsedRealtime(), boot(context))
+    }
+    fun canEditRules(context: Context): Boolean = getStrict(context).let { !it.enabled || !it.blockRuleChanges } && editLockedUntil(context) <= System.currentTimeMillis()
+
+    @Synchronized
     fun setActiveGeofence(context: Context, id: String, active: Boolean) {
         val current = getActiveGeofences(context).toMutableSet()
         if (active) current += id else current -= id
@@ -91,6 +145,12 @@ object Prefs {
 
     fun getActiveGeofences(context: Context): Set<String> =
         p(context).getStringSet(KEY_GEOFENCES, emptySet())?.toSet() ?: emptySet()
+
+    fun clearGeofences(context: Context) { p(context).edit().remove(KEY_GEOFENCES).commit() }
+    fun geofenceStatus(context: Context): String = p(context).getString("geofence_status", "Not registered") ?: "Not registered"
+    fun setGeofenceStatus(context: Context, status: String) { p(context).edit().putString("geofence_status", status).apply() }
+    fun geofenceFingerprint(context: Context): String? = p(context).getString("geofence_fingerprint", null)
+    fun setGeofenceFingerprint(context: Context, fingerprint: String?) { p(context).edit().putString("geofence_fingerprint", fingerprint).apply() }
 
     fun addBlockEvent(context: Context, event: BlockEvent) {
         val events = getBlockEvents(context).toMutableList()
@@ -109,34 +169,38 @@ object Prefs {
     }
 
     fun startFocus(context: Context, packages: Set<String>, durationMinutes: Int) {
-        val end = System.currentTimeMillis() + durationMinutes * 60_000L
+        putDeadline(context, "focus", durationMinutes.coerceIn(1, 1440) * 60_000L)
+        val end = System.currentTimeMillis() + remaining(context, "focus")
         p(context).edit().putLong(KEY_FOCUS_END, end).putStringSet(KEY_FOCUS_PACKAGES, packages).apply()
     }
 
     fun stopFocus(context: Context) {
-        p(context).edit().remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).apply()
+        p(context).edit().remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).remove("focus_deadline").apply()
     }
 
-    fun focusEnd(context: Context): Long = p(context).getLong(KEY_FOCUS_END, 0L)
+    fun focusEnd(context: Context): Long = remaining(context, "focus").let { if (it > 0) System.currentTimeMillis() + it else 0L }
+    fun focusToken(context: Context): String = p(context).getString("focus_deadline", "").orEmpty()
     fun focusPackages(context: Context): Set<String> = p(context).getStringSet(KEY_FOCUS_PACKAGES, emptySet())?.toSet() ?: emptySet()
 
-    fun allowPackageUntil(context: Context, pkg: String, until: Long) {
-        p(context).edit().putLong(KEY_ALLOW_UNTIL_PREFIX + pkg, until).apply()
+    fun allowPackageUntil(context: Context, pkg: String, until: Long, policyToken: String = "") {
+        putDeadline(context, KEY_ALLOW_UNTIL_PREFIX + pkg, until - System.currentTimeMillis())
+        p(context).edit().putString("allow_policy_$pkg", policyToken).commit()
     }
 
-    fun packageAllowedUntil(context: Context, pkg: String): Long = p(context).getLong(KEY_ALLOW_UNTIL_PREFIX + pkg, 0L)
+    fun packageAllowedUntil(context: Context, pkg: String): Long = remaining(context, KEY_ALLOW_UNTIL_PREFIX + pkg).let { if (it > 0) System.currentTimeMillis() + it else 0L }
+    fun allowedPolicy(context: Context, pkg: String): String = p(context).getString("allow_policy_$pkg", "").orEmpty()
 
     fun setEditLockedUntil(context: Context, until: Long) {
-        p(context).edit().putLong(KEY_EDIT_LOCKED_UNTIL, until).apply()
+        putDeadline(context, KEY_EDIT_LOCKED_UNTIL, until - System.currentTimeMillis())
     }
 
-    fun editLockedUntil(context: Context): Long = p(context).getLong(KEY_EDIT_LOCKED_UNTIL, 0L)
+    fun editLockedUntil(context: Context): Long = remaining(context, KEY_EDIT_LOCKED_UNTIL).let { if (it > 0) System.currentTimeMillis() + it else 0L }
 
     fun exportJson(context: Context): String {
         val payload = mapOf(
             "version" to 3,
             "plans" to getPlans(context),
-            "strict" to getStrict(context),
+            "strict" to getStrict(context).copy(pinHash = "", enabled = false, lockUntil = 0L, lockElapsedEnd = 0L),
             "blockScreen" to getBlockScreen(context)
         )
         return gson.toJson(payload)

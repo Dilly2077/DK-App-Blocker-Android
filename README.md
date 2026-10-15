@@ -2,7 +2,9 @@
 
 A local-first Android app blocker with schedule, daily usage limit, location/geofence and manual blocking rules. It also includes focus sessions, local insights and a Strict Mode PIN.
 
-## What works in v0.1
+## Version 0.3.0
+
+See [release notes](RELEASE_NOTES_0.3.0.md) and [audit disposition and verification](AUDIT_RESULTS_0.3.0.md) for changes, test coverage, recovery and remaining device limitations.
 
 - Select installed launchable apps to block.
 - Scheduled rules, including overnight schedules and selectable weekdays.
@@ -24,7 +26,7 @@ Location rules require Location permission; for reliable background geofence tra
 
 ## Install / APK
 
-Every push to `main` runs `.github/workflows/android.yml` and builds a debug APK. In GitHub, open **Actions → Build Android APK → latest successful run → Artifacts** and download `DK-App-Blocker-debug-apk`.
+Every push to `main` runs compilation, all unit tests, debug/release lint, APK signature checks and installation/instrumentation on Android 8 (three-button navigation) and Android 15 (gestural navigation). The exact tested APK is published only when all checks pass. In GitHub, open **Actions → Build Android APK → latest successful run → Artifacts** and download `DK-App-Blocker-debug-apk`. It contains `app-debug.apk` and its SHA-256 checksum. Test/lint reports and device logs/screenshots are separate artifacts.
 
 The artifact ZIP contains `app-debug.apk`, which can be sideloaded on Android after enabling installation from the browser/file manager you use to open it.
 
@@ -38,4 +40,6 @@ The artifact ZIP contains `app-debug.apk`, which can be sideloaded on Android af
 
 ## Privacy
 
-All app data is stored locally in Android `SharedPreferences`. This v0.1 does not contain network calls, analytics, advertising or account infrastructure.
+All app data is stored locally in Android `SharedPreferences`; cloud backup and device transfer are disabled. Passwords use salted PBKDF2. Configuration export excludes credentials and history. The product has no Internet permission, analytics, advertising or account infrastructure. Location rules use the device's Google Play services location APIs.
+
+Build with JDK 17 and Android SDK 35: `./gradlew :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:test :app:lint :app:lintRelease`. The release variant is unsigned; distribute the verified debug artifact for sideloading.

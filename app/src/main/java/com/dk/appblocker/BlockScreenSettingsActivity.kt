@@ -6,6 +6,8 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
@@ -57,7 +59,7 @@ private fun BlockScreenSettingsScreen(onBack: () -> Unit) {
 
     Scaffold(containerColor = Color.Black) { inner ->
         Column(
-            Modifier.fillMaxSize().padding(inner).padding(horizontal = 20.dp, vertical = 12.dp),
+            Modifier.fillMaxSize().padding(inner).imePadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -156,6 +158,7 @@ private fun BlockScreenSettingsScreen(onBack: () -> Unit) {
                     )
                     savedNotice = true
                 },
+                enabled = backgroundHex.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")) && accentHex.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")),
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF35F47A), contentColor = Color.Black),
                 shape = RoundedCornerShape(18.dp)

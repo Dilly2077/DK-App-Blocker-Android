@@ -3,6 +3,7 @@ name: Build Android APK
 on:
   push:
     branches: [ main ]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -15,7 +16,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,13 +32,95 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build debug APK
-        run: gradle :app:assembleDebug --stacktrace
+      - name: Compile, unit test and lint all variants
+        run: ./gradlew :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:test :app:lint :app:lintRelease --stacktrace
+
+      - name: Verify APK manifest and signature
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging app/build/outputs/apk/debug/app-debug.apk | tee apk-manifest.txt
+          grep -q "package: name='com.dk.appblocker'.*versionName='0.3.0'" apk-manifest.txt
+          ! "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions app/build/outputs/apk/debug/app-debug.apk | grep -q android.permission.INTERNET
+          sha256sum app/build/outputs/apk/debug/app-debug.apk > APK-SHA256.txt
+
+      - name: Upload candidate APKs for device verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-input
+          path: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+            APK-SHA256.txt
+          if-no-files-found: error
+
+      - name: Upload test and lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-and-lint-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+
+  device-test:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api: 26
+            navigation: three-button
+          - api: 35
+            navigation: gestural
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: verification-input
+          path: candidate
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install exact candidate and exercise real blocking
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: bash scripts/device-tests.sh candidate ${{ matrix.navigation }}
+      - name: Upload device results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-test-api-${{ matrix.api }}-${{ matrix.navigation }}
+          path: device-results/
+
+  publish:
+    needs: [build, device-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: verification-input
+          path: candidate
+      - name: Prepare verified APK
+        run: |
+          cp "$(find candidate -name app-debug.apk -print -quit)" app-debug.apk
+          cp candidate/APK-SHA256.txt APK-SHA256.txt
+          expected=$(cut -d' ' -f1 APK-SHA256.txt)
+          echo "$expected  app-debug.apk" | sha256sum -c -
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: DK-App-Blocker-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: |
+            app-debug.apk
+            APK-SHA256.txt
           if-no-files-found: error
           retention-days: 30

@@ -7,7 +7,11 @@ import android.content.Intent
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if (intent?.action == Intent.ACTION_BOOT_COMPLETED) {
-            GeofenceManager.sync(context)
+            Prefs.clearGeofences(context)
+            Prefs.setGeofenceFingerprint(context, null)
+            Prefs.getStrict(context) // Expire temporary locks safely after reboot.
+            val pending = goAsync()
+            GeofenceManager.sync(context.applicationContext, onComplete = { pending.finish() })
         }
     }
 }

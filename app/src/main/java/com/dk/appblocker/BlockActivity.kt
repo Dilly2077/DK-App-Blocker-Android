@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,8 +27,12 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.fragment.app.FragmentActivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
-class BlockActivity : ComponentActivity() {
+class BlockActivity : FragmentActivity() {
     companion object {
         const val EXTRA_PACKAGE = "blocked_package"
         const val EXTRA_REASON = "blocked_reason"
@@ -53,9 +58,6 @@ class BlockActivity : ComponentActivity() {
 
     private fun render() {
         val blockedPackage = intent.getStringExtra(EXTRA_PACKAGE).orEmpty()
-        val reason = intent.getStringExtra(EXTRA_REASON) ?: "Blocked by a rule"
-        val strict = intent.getBooleanExtra(EXTRA_STRICT, false)
-        val allowBreaks = intent.getBooleanExtra(EXTRA_ALLOW_BREAKS, true)
         val label = runCatching {
             val info = packageManager.getApplicationInfo(blockedPackage, 0)
             packageManager.getApplicationLabel(info).toString()
@@ -63,18 +65,27 @@ class BlockActivity : ComponentActivity() {
 
         setContent {
             DKTheme {
+                var match by remember(blockedPackage) { mutableStateOf(RuleEngine.Match(false)) }
+                LaunchedEffect(blockedPackage) {
+                    while (true) {
+                        match = withContext(Dispatchers.Default) { RuleEngine.shouldBlock(this@BlockActivity, blockedPackage) }
+                        if (!match.blocked) { finish(); break }
+                        kotlinx.coroutines.delay(1000)
+                    }
+                }
                 BackHandler { goHome() }
                 BlockedScreen(
                     appLabel = label,
-                    reason = reason,
-                    strict = strict,
-                    allowBreaks = allowBreaks,
+                    reason = match.reason,
+                    strict = match.strict,
+                    allowBreaks = match.blocked && match.allowBreaks,
                     onHome = ::goHome,
                     onBreakGranted = {
-                        if (blockedPackage.isNotBlank()) {
-                            Prefs.allowPackageUntil(this, blockedPackage, System.currentTimeMillis() + 5 * 60_000L)
+                        val latest = RuleEngine.shouldBlock(this, blockedPackage)
+                        if (blockedPackage.isNotBlank() && latest.blocked && latest.allowBreaks && latest.policyToken == match.policyToken) {
+                            Prefs.allowPackageUntil(this, blockedPackage, System.currentTimeMillis() + 5 * 60_000L, latest.policyToken)
+                            finish()
                         }
-                        finish()
                     }
                 )
             }
@@ -96,7 +107,9 @@ private fun BlockedScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val settings = remember { Prefs.getBlockScreen(context) }
-    val strictSettings = remember { Prefs.getStrict(context) }
+    val strictSettings = Prefs.getStrict(context)
+    val scope = rememberCoroutineScope()
+    var busy by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf(false) }
@@ -112,7 +125,7 @@ private fun BlockedScreen(
         Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(background, background.copy(alpha = .96f), Color.Black)))
-            .padding(28.dp)
+            .safeDrawingPadding().imePadding().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(28.dp)
     ) {
         Column(
             Modifier.align(Alignment.Center),
@@ -195,8 +208,13 @@ private fun BlockedScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
-                    if (Prefs.checkPin(context, password)) onBreakGranted() else error = true
-                }) { Text("Unlock 5 min") }
+                    busy = true
+                    scope.launch {
+                        val verified = withContext(Dispatchers.Default) { Prefs.checkPin(context, password) }
+                        busy = false
+                        if (verified) onBreakGranted() else error = true
+                    }
+                }, enabled = !busy) { Text(if (busy) "Verifying…" else "Unlock 5 min") }
             },
             dismissButton = { TextButton(onClick = { showPassword = false }) { Text("Cancel") } }
         )

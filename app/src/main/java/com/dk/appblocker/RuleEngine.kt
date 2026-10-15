@@ -6,97 +6,64 @@ import android.content.Context
 import java.time.LocalDateTime
 
 object RuleEngine {
-    data class Match(val blocked: Boolean, val reason: String = "", val plan: BlockPlan? = null)
+    data class Match(val blocked: Boolean, val reason: String = "", val plan: BlockPlan? = null,
+        val strict: Boolean = false, val allowBreaks: Boolean = true, val policyToken: String = "")
 
     fun shouldBlock(context: Context, packageName: String): Match {
-        if (packageName == context.packageName) return Match(false)
+        if (isRecoveryPackage(context, packageName)) return Match(false)
 
         val now = System.currentTimeMillis()
-        if (Prefs.packageAllowedUntil(context, packageName) > now) return Match(false)
-
         val focusEnd = Prefs.focusEnd(context)
-        if (focusEnd > now && packageName in Prefs.focusPackages(context)) {
-            return Match(true, "Focus session", null)
-        }
-
-        val plans = Prefs.getPlans(context)
-        for (plan in plans) {
-            if (!plan.enabled || packageName !in plan.packages) continue
-            if (isPlanActive(context, plan)) return Match(true, reasonFor(plan), plan)
-        }
-        return Match(false)
+        val focus = focusEnd > now && packageName in Prefs.focusPackages(context)
+        val plans = Prefs.getPlans(context).filter { it.enabled && packageName in it.packages && isPlanActive(context, it) }
+        val match = BlockingPolicy.combine(plans, focus)
+        val strict = Prefs.getStrict(context)
+        val token = com.google.gson.Gson().toJson(plans.sortedBy { it.id }) +
+            (if (focus) Prefs.focusToken(context) else "") + "|${strict.enabled}|${strict.unlockMethod}"
+        if (match.allowBreaks && token == Prefs.allowedPolicy(context, packageName) && Prefs.packageAllowedUntil(context, packageName) > now) return Match(false)
+        return match.copy(policyToken = token, strict = match.strict || strict.enabled)
     }
 
     fun isPlanActive(context: Context, plan: BlockPlan): Boolean = when (plan.triggerType) {
         TriggerType.MANUAL -> plan.manualActive
-        TriggerType.LOCATION -> plan.id in Prefs.getActiveGeofences(context)
+        TriggerType.LOCATION -> GeofenceManager.hasPermissions(context) && plan.id in Prefs.getActiveGeofences(context)
         TriggerType.DAILY_LIMIT -> {
             if (!hasUsageAccess(context)) false
-            else usageTodayMillis(context, plan.packages) >= plan.dailyLimitMinutes * 60_000L
+            else BlockingPolicy.dailyLimitReached(usageTodayMillis(context, plan.packages), plan.dailyLimitMinutes)
         }
-        TriggerType.SCHEDULE -> isScheduleActive(plan)
-    }
-
-    private fun isScheduleActive(plan: BlockPlan): Boolean {
-        val now = LocalDateTime.now()
-        val day = now.dayOfWeek.value
-        val minute = now.hour * 60 + now.minute
-        if (plan.startMinute == plan.endMinute) return day in plan.days
-        return if (plan.startMinute < plan.endMinute) {
-            day in plan.days && minute in plan.startMinute until plan.endMinute
-        } else {
-            val previousDay = if (day == 1) 7 else day - 1
-            (day in plan.days && minute >= plan.startMinute) ||
-                (previousDay in plan.days && minute < plan.endMinute)
-        }
-    }
-
-    private fun reasonFor(plan: BlockPlan): String = when (plan.triggerType) {
-        TriggerType.SCHEDULE -> "${plan.name} · scheduled block"
-        TriggerType.DAILY_LIMIT -> "${plan.name} · ${plan.dailyLimitMinutes}m daily limit reached"
-        TriggerType.LOCATION -> "${plan.name} · location block"
-        TriggerType.MANUAL -> "${plan.name} · focus block"
+        TriggerType.SCHEDULE -> BlockingPolicy.scheduleActive(plan, LocalDateTime.now())
     }
 
     fun usageTodayMillis(context: Context, packages: Collection<String>): Long {
-        if (packages.isEmpty()) return 0L
-        val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val start = startOfTodayMillis()
-        val end = System.currentTimeMillis()
-        val events = manager.queryEvents(start, end)
-        val event = UsageEvents.Event()
-        val foregroundStarts = mutableMapOf<String, Long>()
-        val totals = mutableMapOf<String, Long>()
+        if (packages.isEmpty() || !hasUsageAccess(context)) return 0L
+        return usageTotals(context, startOfTodayMillis(), System.currentTimeMillis()).filterKeys { it in packages }.values.sum()
+    }
 
+    private fun usageTotals(context: Context, start: Long, end: Long): Map<String, Long> = runCatching {
+        val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        // Include yesterday to seed sessions spanning midnight. Android retains only a few days of events.
+        val events = manager.queryEvents((start - 24 * 60 * 60_000L).coerceAtLeast(0), end)
+        val event = UsageEvents.Event()
+        val transitions = mutableListOf<UsageAccumulator.Transition>()
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            val pkg = event.packageName ?: continue
-            if (pkg !in packages) continue
             when (event.eventType) {
-                UsageEvents.Event.ACTIVITY_RESUMED,
-                UsageEvents.Event.MOVE_TO_FOREGROUND -> foregroundStarts[pkg] = event.timeStamp
-
-                UsageEvents.Event.ACTIVITY_PAUSED,
-                UsageEvents.Event.MOVE_TO_BACKGROUND -> {
-                    val started = foregroundStarts.remove(pkg)
-                    if (started != null && event.timeStamp >= started) {
-                        totals[pkg] = (totals[pkg] ?: 0L) + (event.timeStamp - started)
-                    }
-                }
+                UsageEvents.Event.MOVE_TO_FOREGROUND, UsageEvents.Event.MOVE_TO_BACKGROUND ->
+                    transitions += UsageAccumulator.Transition(event.packageName.orEmpty(), event.className.orEmpty(), event.timeStamp, event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND)
+                UsageEvents.Event.SCREEN_NON_INTERACTIVE, UsageEvents.Event.DEVICE_SHUTDOWN ->
+                    transitions += UsageAccumulator.Transition("", "", event.timeStamp, false)
             }
         }
-
-        val now = System.currentTimeMillis()
-        foregroundStarts.forEach { (pkg, started) -> totals[pkg] = (totals[pkg] ?: 0L) + (now - started).coerceAtLeast(0) }
-        return totals.values.sum()
-    }
+        UsageAccumulator.totals(transitions, start, end)
+    }.getOrDefault(emptyMap())
 
     fun topUsageToday(context: Context): List<UsageRow> = topUsage(context, startOfTodayMillis(), System.currentTimeMillis())
 
     fun topUsage(context: Context, start: Long, end: Long): List<UsageRow> {
         if (!hasUsageAccess(context)) return emptyList()
+        // Aggregated stats are the OS's historical source; daily enforcement uses clipped events above.
         val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val stats = manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end) ?: return emptyList()
+        val stats = runCatching { manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end) }.getOrNull() ?: return emptyList()
         val pm = context.packageManager
         return stats
             .filter { it.totalTimeInForeground > 0 && it.packageName != context.packageName }
