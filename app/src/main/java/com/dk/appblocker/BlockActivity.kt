@@ -74,7 +74,7 @@ class BlockActivity : FragmentActivity() {
                     }
                 }
                 BackHandler { goHome() }
-                BlockedScreen(
+                key(blockedPackage, match.policyToken) { BlockedScreen(
                     appLabel = label,
                     reason = match.reason,
                     strict = match.strict,
@@ -87,7 +87,7 @@ class BlockActivity : FragmentActivity() {
                             finish()
                         }
                     }
-                )
+                ) }
             }
         }
     }
@@ -106,7 +106,7 @@ private fun BlockedScreen(
     onBreakGranted: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val settings = remember { Prefs.getBlockScreen(context) }
+    val settings = Prefs.getBlockScreen(context)
     val strictSettings = Prefs.getStrict(context)
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }

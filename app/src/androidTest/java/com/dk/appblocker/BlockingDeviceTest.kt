@@ -34,18 +34,18 @@ class BlockingDeviceTest {
         previousEnabled = Settings.Secure.getInt(context.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
         val service = "${context.packageName}/${BlockAccessibilityService::class.java.name}"
         val enabled = listOfNotNull(previousServices?.takeIf { it.isNotBlank() }, service).joinToString(":")
-        shell("settings put secure enabled_accessibility_services '$enabled'")
+        shell("settings put secure enabled_accessibility_services $enabled")
         shell("settings put secure accessibility_enabled 1")
         val until = System.currentTimeMillis() + 10_000
         while (!isAccessibilityEnabled(context) && System.currentTimeMillis() < until) Thread.sleep(100)
-        assertTrue(isAccessibilityEnabled(context))
+        assertTrue("Enabled services: ${Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)}", isAccessibilityEnabled(context))
         Thread.sleep(1500) // Allow the system's service binding to complete.
     }
     @After fun cleanup() {
         context.getSharedPreferences("dk_blocker_prefs", 0).edit().clear().commit()
         device.pressHome()
         if (previousServices == null) shell("settings delete secure enabled_accessibility_services")
-        else shell("settings put secure enabled_accessibility_services '$previousServices'")
+        else shell("settings put secure enabled_accessibility_services $previousServices")
         shell("settings put secure accessibility_enabled $previousEnabled")
     }
     private fun configure(breaks: Boolean = false) {
@@ -74,6 +74,12 @@ class BlockingDeviceTest {
         Prefs.saveStrict(context, StrictSettings(enabled = true, unlockMethod = "TIMER",
             lockUntil = System.currentTimeMillis() + 300_000, lockElapsedEnd = android.os.SystemClock.elapsedRealtime() + 300_000,
             lockBoot = Prefs.boot(context)))
+        val adminResult = shell("dpm set-active-admin ${context.packageName}/.StrictDeviceAdminReceiver")
+        assertTrue(adminResult, isDeviceAdminActive(context))
+        removeDeviceAdmin(context)
+        val adminDeadline = System.currentTimeMillis() + 5000
+        while (isDeviceAdminActive(context) && System.currentTimeMillis() < adminDeadline) Thread.sleep(100)
+        assertFalse("Administrator removal must remain possible during Strict Mode", isDeviceAdminActive(context))
         context.startActivity(Intent(Settings.ACTION_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         assertTrue(device.wait(Until.hasObject(By.pkg("com.android.settings").depth(0)), 5000))
         assertFalse(device.hasObject(By.text("Blocked")))

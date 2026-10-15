@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 mkdir -p device-results
-trap 'adb logcat -d > device-results/logcat.txt || true' EXIT
+trap 'adb logcat -d > device-results/logcat.txt || true; adb shell dumpsys accessibility > device-results/accessibility.txt || true' EXIT
 apk=$(find "$1" -name app-debug.apk -print -quit)
 tests=$(find "$1" -name app-debug-androidTest.apk -print -quit)
 adb install -r "$apk" | tee device-results/install.txt
@@ -21,6 +21,7 @@ for phase in prepare process; do
   grep -q 'OK (1 test)' "device-results/persistence-$phase.txt"
 done
 adb reboot
+sleep 2
 adb wait-for-device
 for attempt in $(seq 1 120); do
   if [[ "$(adb shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]; then break; fi
