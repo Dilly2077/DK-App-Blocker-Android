@@ -120,6 +120,8 @@ private enum class Route { MAIN, CREATE_TYPE, EDITOR, STRICT }
 @Composable
 private fun AppRoot() {
     val context = LocalContext.current
+    val saveScope = rememberCoroutineScope()
+    var savingPlan by remember { mutableStateOf(false) }
     var route by remember { mutableStateOf(Route.MAIN) }
     var tab by remember { mutableStateOf(MainTab.HOME) }
     var plans by remember { mutableStateOf(Prefs.getPlans(context).toList()) }
@@ -153,18 +155,22 @@ private fun AppRoot() {
         )
         Route.EDITOR -> RuleEditorScreen(
             initial = editing ?: defaultPlanFor(TriggerType.SCHEDULE),
+            saving = savingPlan,
             onBack = { route = Route.CREATE_TYPE },
             onSave = { plan ->
                 if (!Prefs.canEditRules(context)) { route = Route.STRICT; return@RuleEditorScreen }
                 val updated = Prefs.getPlans(context)
                 val index = updated.indexOfFirst { it.id == plan.id }
                 if (index >= 0) updated[index] = plan else updated.add(plan)
-                Prefs.savePlans(context, updated)
-                GeofenceManager.sync(context, updated)
-                plans = updated.toList()
-                editing = null
-                tab = MainTab.RULES
-                route = Route.MAIN
+                savingPlan = true
+                saveScope.launch {
+                    val saved = withContext(Dispatchers.IO) { Prefs.savePlans(context, updated) }
+                    savingPlan = false
+                    if (saved) {
+                        GeofenceManager.sync(context, updated)
+                        plans = updated.toList(); editing = null; tab = MainTab.RULES; route = Route.MAIN
+                    } else android.widget.Toast.makeText(context, "Could not save rule to storage. Please retry.", android.widget.Toast.LENGTH_LONG).show()
+                }
             }
         )
         Route.STRICT -> StrictModeScreen(
@@ -511,7 +517,7 @@ private fun RuleTypeButton(emoji: String, title: String, subtitle: String, onCli
 }
 
 @Composable
-private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (BlockPlan) -> Unit) {
+private fun RuleEditorScreen(initial: BlockPlan, saving: Boolean = false, onBack: () -> Unit, onSave: (BlockPlan) -> Unit) {
     val context = LocalContext.current
     var name by remember { mutableStateOf(initial.name) }
     var selectedApps by remember { mutableStateOf(initial.packages.toSet()) }
@@ -584,16 +590,18 @@ private fun RuleEditorScreen(initial: BlockPlan, onBack: () -> Unit, onSave: (Bl
                 }
                 LabeledCard("Protection", "Optional controls for harder-to-bypass rules.") {
                     ToggleRow("Rule enabled", enabled) { enabled = it }
-                    ToggleRow("Strict block", strict) { strict = it }
+                    ToggleRow("Require password for breaks", strict) { strict = it }
                     ToggleRow("Allow 5-minute breaks", allowBreaks) { allowBreaks = it }
+                    if (strict && allowBreaks) Text("This rule requires your saved password even when global Strict Mode is off. Set it in Profile → Strict Mode. Active global Strict Mode may impose biometrics or a timer instead.", color = Muted, fontSize = 12.sp)
+                    if (strict && allowBreaks && Prefs.getStrict(context).pinHash.isBlank()) Text("Set a password in Profile → Strict Mode before saving this rule with breaks, or disable breaks.", color = Danger, fontSize = 12.sp)
                 }
                 Button(
                     onClick = { onSave(initial.copy(name = name.ifBlank { initial.name }, packages = selectedApps.toList(), enabled = enabled, strict = strict, allowBreaks = allowBreaks, days = days, startMinute = startMinute, endMinute = endMinute, dailyLimitMinutes = limit, latitude = lat, longitude = lon, radiusMeters = radius, manualActive = manualActive, locationConfigured = locationConfigured)) },
-                    enabled = selectedApps.isNotEmpty() && (initial.triggerType != TriggerType.LOCATION || locationConfigured) && (initial.triggerType != TriggerType.SCHEDULE || days.isNotEmpty()),
+                    enabled = !saving && selectedApps.isNotEmpty() && (!strict || !allowBreaks || Prefs.getStrict(context).pinHash.isNotBlank()) && (initial.triggerType != TriggerType.LOCATION || locationConfigured) && (initial.triggerType != TriggerType.SCHEDULE || days.isNotEmpty()),
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.Black),
                     shape = RoundedCornerShape(18.dp)
-                ) { Text("Save Rule", fontWeight = FontWeight.Bold) }
+                ) { Text(if (saving) "Saving…" else "Save Rule", fontWeight = FontWeight.Bold) }
                 Spacer(Modifier.height(24.dp))
             }
         }
@@ -751,7 +759,7 @@ private fun StrictModeScreen(onBack: () -> Unit, onNavigate: (MainTab) -> Unit) 
                             Text(if (strict.enabled) "Ends in ${formatDuration(remaining)}" else "Duration: ${strict.timerDurationMinutes} minutes", color = Green, fontWeight = FontWeight.Bold)
                             if (!strict.enabled) Slider(strict.timerDurationMinutes.toFloat(), { save(strict.copy(timerDurationMinutes = it.roundToInt().coerceIn(5, 240))) }, valueRange = 5f..240f)
                         }
-                        if (method in setOf("PASSWORD", "BIOMETRIC") && !strict.enabled) {
+                        if (!strict.enabled) {
                             OutlinedButton(onClick = { showPasswordSetup = true }) { Text(if (strict.pinHash.isBlank()) "Set password" else "Change password") }
                         }
                         if (method == "BIOMETRIC") Text("Android will show the system biometric prompt when you try to disable Strict Mode.", color = Muted, fontSize = 12.sp)

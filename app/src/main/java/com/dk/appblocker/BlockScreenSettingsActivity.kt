@@ -24,6 +24,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.launch
 
 class BlockScreenSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -49,6 +52,9 @@ private fun BlockScreenSettingsScreen(onBack: () -> Unit) {
     var accentHex by remember { mutableStateOf(saved.accentHex) }
     var showAppName by remember { mutableStateOf(saved.showAppName) }
     var savedNotice by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var saveError by remember { mutableStateOf(false) }
+    val saveScope = rememberCoroutineScope()
 
     BackHandler { onBack() }
 
@@ -140,14 +146,15 @@ private fun BlockScreenSettingsScreen(onBack: () -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             )
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Show blocked app name", modifier = Modifier.weight(1f))
+                Text("Show app-name heading", modifier = Modifier.weight(1f))
                 Switch(checked = showAppName, onCheckedChange = { showAppName = it })
             }
+            Text("This switch controls the separate heading. Custom messages still expand {app}; remove that token from the message to hide the name there too.", color = Color(0xFF98A69E), fontSize = 12.sp)
 
             Button(
                 onClick = {
-                    Prefs.saveBlockScreen(
-                        context,
+                    saving = true
+                    val settings =
                         BlockScreenSettings(
                             title = title.ifBlank { "Blocked" },
                             message = message.ifBlank { "Stay focused. {app} is blocked right now." },
@@ -155,14 +162,18 @@ private fun BlockScreenSettingsScreen(onBack: () -> Unit) {
                             accentHex = accentHex.ifBlank { "#35F47A" },
                             showAppName = showAppName
                         )
-                    )
-                    savedNotice = true
+                    saveScope.launch {
+                        savedNotice = withContext(Dispatchers.IO) { Prefs.saveBlockScreen(context, settings) }
+                        saveError = !savedNotice
+                        saving = false
+                    }
                 },
-                enabled = backgroundHex.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")) && accentHex.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")),
+                enabled = !saving && backgroundHex.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")) && accentHex.matches(Regex("#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")),
                 modifier = Modifier.fillMaxWidth().height(54.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF35F47A), contentColor = Color.Black),
                 shape = RoundedCornerShape(18.dp)
-            ) { Text(if (savedNotice) "Saved ✓" else "Save blocked screen", fontWeight = FontWeight.Bold) }
+            ) { Text(if (saving) "Saving…" else if (savedNotice) "Saved ✓" else "Save blocked screen", fontWeight = FontWeight.Bold) }
+            if (saveError) Text("Could not save to storage. Please retry.", color = MaterialTheme.colorScheme.error)
         }
     }
 }

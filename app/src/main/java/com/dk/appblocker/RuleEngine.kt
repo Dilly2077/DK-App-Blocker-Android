@@ -4,8 +4,12 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import java.time.LocalDateTime
+import android.os.Build
+import android.os.SystemClock
 
 object RuleEngine {
+    private val usageSamples = UsageSampleCache()
+    internal fun usageQueryCount(): Long = usageSamples.loads
     data class Match(val blocked: Boolean, val reason: String = "", val plan: BlockPlan? = null,
         val strict: Boolean = false, val allowBreaks: Boolean = true, val policyToken: String = "")
 
@@ -27,16 +31,18 @@ object RuleEngine {
     fun isPlanActive(context: Context, plan: BlockPlan): Boolean = when (plan.triggerType) {
         TriggerType.MANUAL -> plan.manualActive
         TriggerType.LOCATION -> GeofenceManager.hasPermissions(context) && plan.id in Prefs.getActiveGeofences(context)
-        TriggerType.DAILY_LIMIT -> {
-            if (!hasUsageAccess(context)) false
-            else BlockingPolicy.dailyLimitReached(usageTodayMillis(context, plan.packages), plan.dailyLimitMinutes)
-        }
+        TriggerType.DAILY_LIMIT -> BlockingPolicy.dailyLimitReached(usageTodayMillis(context, plan.packages), plan.dailyLimitMinutes)
         TriggerType.SCHEDULE -> BlockingPolicy.scheduleActive(plan, LocalDateTime.now())
     }
 
     fun usageTodayMillis(context: Context, packages: Collection<String>): Long {
-        if (packages.isEmpty() || !hasUsageAccess(context)) return 0L
-        return usageTotals(context, startOfTodayMillis(), System.currentTimeMillis()).filterKeys { it in packages }.values.sum()
+        if (packages.isEmpty()) return 0L
+        if (!hasUsageAccess(context)) { usageSamples.invalidate(); return 0L }
+        val start = startOfTodayMillis()
+        val sample = usageSamples.get("${context.packageName}:$start:${Prefs.boot(context)}", SystemClock.elapsedRealtime()) {
+            usageTotals(context, start, System.currentTimeMillis())
+        }
+        return sample.filterKeys { it in packages }.values.sum()
     }
 
     private fun usageTotals(context: Context, start: Long, end: Long): Map<String, Long> = runCatching {
@@ -52,9 +58,11 @@ object RuleEngine {
                     transitions += UsageAccumulator.Transition(event.packageName.orEmpty(), event.className.orEmpty(), event.timeStamp, event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND)
                 UsageEvents.Event.SCREEN_NON_INTERACTIVE, UsageEvents.Event.DEVICE_SHUTDOWN ->
                     transitions += UsageAccumulator.Transition("", "", event.timeStamp, false)
+                UsageEvents.Event.ACTIVITY_STOPPED -> transitions += UsageAccumulator.Transition(
+                    event.packageName.orEmpty(), event.className.orEmpty(), event.timeStamp, false)
             }
         }
-        UsageAccumulator.totals(transitions, start, end)
+        UsageAccumulator.totals(transitions, start, end, singleResume = Build.VERSION.SDK_INT < 29)
     }.getOrDefault(emptyMap())
 
     fun topUsageToday(context: Context): List<UsageRow> = topUsage(context, startOfTodayMillis(), System.currentTimeMillis())

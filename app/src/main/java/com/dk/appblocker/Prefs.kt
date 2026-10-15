@@ -37,9 +37,8 @@ object Prefs {
         }.getOrDefault(mutableListOf())
     }
 
-    fun savePlans(context: Context, plans: List<BlockPlan>) {
-        p(context).edit().putString(KEY_PLANS, gson.toJson(plans)).apply()
-    }
+    fun savePlans(context: Context, plans: List<BlockPlan>): Boolean =
+        p(context).edit().putString(KEY_PLANS, gson.toJson(plans)).commit()
 
     fun getStrict(context: Context): StrictSettings {
         val json = p(context).getString(KEY_STRICT, null) ?: return StrictSettings()
@@ -91,9 +90,8 @@ object Prefs {
         }.getOrDefault(BlockScreenSettings())
     }
 
-    fun saveBlockScreen(context: Context, settings: BlockScreenSettings) {
-        p(context).edit().putString(KEY_BLOCK_SCREEN, gson.toJson(settings)).apply()
-    }
+    fun saveBlockScreen(context: Context, settings: BlockScreenSettings): Boolean =
+        p(context).edit().putString(KEY_BLOCK_SCREEN, gson.toJson(settings)).commit()
 
     fun hashPin(pin: String): String = CredentialHasher.hash(pin)
 
@@ -122,10 +120,13 @@ object Prefs {
     }
 
     fun boot(context: Context): Int = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, 0)
-    private fun putDeadline(context: Context, key: String, duration: Long) {
+    private fun deadlineJson(context: Context, duration: Long): String {
         val bounded = duration.coerceIn(0L, 24 * 60 * 60_000L)
         val deadline = Deadline(System.currentTimeMillis() + bounded, SystemClock.elapsedRealtime() + bounded, boot(context))
-        p(context).edit().putString(key + "_deadline", gson.toJson(deadline)).commit()
+        return gson.toJson(deadline)
+    }
+    private fun putDeadline(context: Context, key: String, duration: Long) {
+        p(context).edit().putString(key + "_deadline", deadlineJson(context, duration)).commit()
     }
     private fun remaining(context: Context, key: String): Long = runCatching {
         gson.fromJson(p(context).getString(key + "_deadline", null), Deadline::class.java)
@@ -140,7 +141,7 @@ object Prefs {
     fun setActiveGeofence(context: Context, id: String, active: Boolean) {
         val current = getActiveGeofences(context).toMutableSet()
         if (active) current += id else current -= id
-        p(context).edit().putStringSet(KEY_GEOFENCES, current).apply()
+        p(context).edit().putStringSet(KEY_GEOFENCES, current).commit()
     }
 
     fun getActiveGeofences(context: Context): Set<String> =
@@ -169,13 +170,13 @@ object Prefs {
     }
 
     fun startFocus(context: Context, packages: Set<String>, durationMinutes: Int) {
-        putDeadline(context, "focus", durationMinutes.coerceIn(1, 1440) * 60_000L)
-        val end = System.currentTimeMillis() + remaining(context, "focus")
-        p(context).edit().putLong(KEY_FOCUS_END, end).putStringSet(KEY_FOCUS_PACKAGES, packages).apply()
+        val duration = durationMinutes.coerceIn(1, 1440) * 60_000L
+        p(context).edit().putString("focus_deadline", deadlineJson(context, duration))
+            .putLong(KEY_FOCUS_END, System.currentTimeMillis() + duration).putStringSet(KEY_FOCUS_PACKAGES, packages.toSet()).commit()
     }
 
     fun stopFocus(context: Context) {
-        p(context).edit().remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).remove("focus_deadline").apply()
+        p(context).edit().remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).remove("focus_deadline").commit()
     }
 
     fun focusEnd(context: Context): Long = remaining(context, "focus").let { if (it > 0) System.currentTimeMillis() + it else 0L }
@@ -183,8 +184,8 @@ object Prefs {
     fun focusPackages(context: Context): Set<String> = p(context).getStringSet(KEY_FOCUS_PACKAGES, emptySet())?.toSet() ?: emptySet()
 
     fun allowPackageUntil(context: Context, pkg: String, until: Long, policyToken: String = "") {
-        putDeadline(context, KEY_ALLOW_UNTIL_PREFIX + pkg, until - System.currentTimeMillis())
-        p(context).edit().putString("allow_policy_$pkg", policyToken).commit()
+        p(context).edit().putString(KEY_ALLOW_UNTIL_PREFIX + pkg + "_deadline", deadlineJson(context, until - System.currentTimeMillis()))
+            .putString("allow_policy_$pkg", policyToken).commit()
     }
 
     fun packageAllowedUntil(context: Context, pkg: String): Long = remaining(context, KEY_ALLOW_UNTIL_PREFIX + pkg).let { if (it > 0) System.currentTimeMillis() + it else 0L }

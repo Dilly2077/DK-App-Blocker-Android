@@ -12,10 +12,16 @@ if [[ "$2" == gestural ]]; then
   adb shell cmd overlay list | tee device-results/navigation.txt
   grep -q '\[x\] com.android.internal.systemui.navbar.gestural' device-results/navigation.txt
 fi
-adb shell am instrument -w -r -e notClass com.dk.appblocker.PersistenceDeviceTest com.dk.appblocker.test/androidx.test.runner.AndroidJUnitRunner | tee device-results/instrumentation.txt
+adb shell am instrument -w -r -e notClass com.dk.appblocker.PersistenceDeviceTest,com.dk.appblocker.SaveDurabilityTest com.dk.appblocker.test/androidx.test.runner.AndroidJUnitRunner | tee device-results/instrumentation.txt
 grep -q 'OK (' device-results/instrumentation.txt
 if grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=' device-results/instrumentation.txt; then exit 1; fi
 adb pull /sdcard/Android/data/com.dk.appblocker/files device-results/screenshots
+for phase in rules appearance; do
+  adb shell am instrument -w -r -e class com.dk.appblocker.SaveDurabilityTest -e phase "$phase" com.dk.appblocker.test/androidx.test.runner.AndroidJUnitRunner | tee "device-results/immediate-kill-$phase.txt"
+  grep -q 'Process crashed' "device-results/immediate-kill-$phase.txt"
+done
+adb shell am instrument -w -r -e class com.dk.appblocker.SaveDurabilityTest -e phase verify com.dk.appblocker.test/androidx.test.runner.AndroidJUnitRunner | tee device-results/immediate-kill-verify.txt
+grep -q 'OK (1 test)' device-results/immediate-kill-verify.txt
 for phase in prepare process; do
   adb shell am instrument -w -r -e class com.dk.appblocker.PersistenceDeviceTest -e phase "$phase" com.dk.appblocker.test/androidx.test.runner.AndroidJUnitRunner | tee "device-results/persistence-$phase.txt"
   grep -q 'OK (1 test)' "device-results/persistence-$phase.txt"

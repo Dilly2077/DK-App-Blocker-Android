@@ -6,6 +6,8 @@ A local-first Android app blocker with schedule, daily usage limit, location/geo
 
 See [release notes](RELEASE_NOTES_0.3.0.md) and [audit disposition and verification](AUDIT_RESULTS_0.3.0.md) for changes, test coverage, recovery and remaining device limitations.
 
+The [second-audit testing build](SECOND_AUDIT_RESULTS_0.3.0.md) keeps version 0.3.0 and raises the Android version code to 4. It adds blocked-pane overlays that preserve recovery access, independent password checks for strict-rule breaks, durable saves and shared daily-usage samples. Physical-device qualification is still pending; this remains a testing release.
+
 - Select installed launchable apps to block.
 - Scheduled rules, including overnight schedules and selectable weekdays.
 - Daily combined-use limits using Android Usage Access.
@@ -26,7 +28,7 @@ Location rules require Location permission; for reliable background geofence tra
 
 ## Install / APK
 
-Builds run locally on the PC hosting this workspace. Download locally built APKs from [GitHub Releases](https://github.com/Dilly2077/DK-App-Blocker-Android/releases). The [0.3.0 local-build release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.0-local) contains the installable debug app, the unsigned release validation APK, the instrumentation-only test APK and SHA-256 checksums. Use `DK-App-Blocker-0.3.0-local.apk` for normal installation. The unsigned release APK requires signing; the test APK is not the app.
+Builds run locally on the PC hosting this workspace. Download locally built APKs from [GitHub Releases](https://github.com/Dilly2077/DK-App-Blocker-Android/releases). The [second-audit testing release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.0-local-audit2) contains the new version-code-4 APK, unsigned release validation build, test/audit companion APKs and checksums. Use `DK-App-Blocker-0.3.0-local-audit2.apk` for normal installation. Device qualification remains pending. The [original local build](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.0-local) remains available for history. Unsigned release APKs require signing; instrumentation APKs are not the normal app.
 
 The signed debug APK can be sideloaded after enabling installation from the browser/file manager used to open it. Reuse the same local signing key for future compatible updates. A differently signed previous build can require uninstalling first, deleting its local data.
 

@@ -4,6 +4,16 @@ import java.time.LocalDateTime
 
 /** Pure policy shared by enforcement and tests. */
 object BlockingPolicy {
+    enum class BreakGate { FREE, PASSWORD, BIOMETRIC, TIMER, PASSWORD_SETUP }
+    fun breakGate(ruleStrict: Boolean, settings: StrictSettings): BreakGate {
+        if (settings.enabled) return when (settings.unlockMethod) {
+            "TIMER" -> BreakGate.TIMER
+            "BIOMETRIC" -> BreakGate.BIOMETRIC
+            else -> if (settings.pinHash.isNotBlank()) BreakGate.PASSWORD else BreakGate.PASSWORD_SETUP
+        }
+        return if (!ruleStrict) BreakGate.FREE
+            else if (settings.pinHash.isNotBlank()) BreakGate.PASSWORD else BreakGate.PASSWORD_SETUP
+    }
     fun dailyLimitReached(usedMillis: Long, limitMinutes: Int): Boolean =
         limitMinutes > 0 && usedMillis >= limitMinutes.toLong() * 60_000L
     fun scheduleActive(plan: BlockPlan, now: LocalDateTime): Boolean {
@@ -40,7 +50,7 @@ data class Deadline(val wallEnd: Long, val elapsedEnd: Long, val boot: Int) {
 /** Tracks individual resumed activities, clips at midnight and avoids duplicate resume overcount. */
 object UsageAccumulator {
     data class Transition(val pkg: String, val activity: String, val at: Long, val resumed: Boolean)
-    fun totals(events: List<Transition>, start: Long, end: Long): Map<String, Long> {
+    fun totals(events: List<Transition>, start: Long, end: Long, singleResume: Boolean = false): Map<String, Long> {
         val active = mutableMapOf<Pair<String, String>, Long>()
         val intervals = mutableMapOf<String, MutableList<Pair<Long, Long>>>()
         fun close(key: Pair<String, String>, at: Long) {
@@ -54,7 +64,12 @@ object UsageAccumulator {
             if (event.pkg.isEmpty()) active.keys.toList().forEach { close(it, event.at) }
             else {
                 val key = event.pkg to event.activity
-                if (event.resumed) active.putIfAbsent(key, event.at) else close(key, event.at)
+                if (event.resumed) {
+                    if (singleResume) active.keys.filter { it != key }.toList().forEach { close(it, event.at) }
+                    active.putIfAbsent(key, event.at)
+                } else if (event.activity.isEmpty()) {
+                    active.keys.filter { it.first == event.pkg }.toList().forEach { close(it, event.at) }
+                } else close(key, event.at)
             }
         }
         active.keys.toList().forEach { close(it, end) }

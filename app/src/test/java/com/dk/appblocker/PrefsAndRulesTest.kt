@@ -93,6 +93,14 @@ class PrefsAndRulesTest {
         Prefs.saveBlockScreen(context, settings)
         assertEquals(settings, Prefs.getBlockScreen(context))
     }
+    @Test fun ruleAndAppearanceSaveReturnOnlyAfterTheirXmlIsWrittenToDisk() {
+        assertTrue(Prefs.savePlans(context, listOf(manual().copy(name = "Durable rule marker"))))
+        val file = java.io.File(context.applicationInfo.dataDir, "shared_prefs/dk_blocker_prefs.xml")
+        assertTrue(file.exists())
+        assertTrue(file.readText().contains("Durable rule marker"))
+        assertTrue(Prefs.saveBlockScreen(context, BlockScreenSettings(title = "Durable appearance marker")))
+        assertTrue(file.readText().contains("Durable appearance marker"))
+    }
     @Test fun exportedConfigurationContainsNoCredential() {
         Prefs.saveStrict(context, StrictSettings(pinHash = "SECRET", enabled = true))
         assertFalse(Prefs.exportJson(context).contains("SECRET"))

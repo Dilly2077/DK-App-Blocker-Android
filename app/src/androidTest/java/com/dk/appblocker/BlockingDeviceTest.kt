@@ -43,6 +43,11 @@ class BlockingDeviceTest {
     }
     @After fun cleanup() {
         context.getSharedPreferences("dk_blocker_prefs", 0).edit().clear().commit()
+        if (android.os.Build.VERSION.SDK_INT < 31 && instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+                .windows.any { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER }) {
+            instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+                .performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN)
+        }
         device.pressHome()
         if (previousServices == null) shell("settings delete secure enabled_accessibility_services")
         else shell("settings put secure enabled_accessibility_services $previousServices")
@@ -74,7 +79,7 @@ class BlockingDeviceTest {
         Prefs.saveStrict(context, StrictSettings(enabled = true, unlockMethod = "TIMER",
             lockUntil = System.currentTimeMillis() + 300_000, lockElapsedEnd = android.os.SystemClock.elapsedRealtime() + 300_000,
             lockBoot = Prefs.boot(context)))
-        val adminResult = shell("dpm set-active-admin ${context.packageName}/.StrictDeviceAdminReceiver")
+        val adminResult = shell("dpm set-active-admin ${deviceAdminComponent(context).flattenToString()}")
         assertTrue(adminResult, isDeviceAdminActive(context))
         removeDeviceAdmin(context)
         val adminDeadline = System.currentTimeMillis() + 5000
@@ -94,8 +99,7 @@ class BlockingDeviceTest {
         configure(true); openFixture(); assertTrue(blocked())
         device.findObject(By.text("Take a 5-minute break")).click()
         assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 5000))
-        val match = run { Prefs.allowPackageUntil(context, fixturePackage, 0); RuleEngine.shouldBlock(context, fixturePackage) }
-        Prefs.allowPackageUntil(context, fixturePackage, System.currentTimeMillis() + 1200, match.policyToken)
+        Prefs.allowPackageUntil(context, fixturePackage, System.currentTimeMillis() + 1200, Prefs.allowedPolicy(context, fixturePackage))
         assertTrue("Expired break did not reblock without a window switch", blocked())
     }
     @Test fun blockedScreenCustomizationRendersFromSavedPreferences() {
@@ -118,5 +122,50 @@ class BlockingDeviceTest {
         openFixture()
         assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 5000))
         assertFalse(device.hasObject(By.text("Blocked")))
+    }
+    @Test fun individualStrictRuleRequiresPasswordWithGlobalStrictModeOff() {
+        Prefs.replacePin(context, "", "audit-password")
+        Prefs.savePlans(context, listOf(BlockPlan(triggerType = TriggerType.MANUAL, packages = listOf(fixturePackage),
+            manualActive = true, strict = true, allowBreaks = true)))
+        assertFalse(Prefs.getStrict(context).enabled)
+        openFixture(); assertTrue(blocked())
+        device.findObject(By.text("Take a 5-minute break")).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Verify Strict Mode")), 3000))
+        device.findObject(By.clazz("android.widget.EditText")).text = "wrong"
+        device.findObject(By.text("Unlock 5 min")).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Incorrect password")), 5000))
+        assertFalse(device.hasObject(By.text("Fixture distraction")))
+        device.findObject(By.clazz("android.widget.EditText")).text = "audit-password"
+        device.findObject(By.text("Unlock 5 min")).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 8000))
+    }
+    @Test fun blockedPaneStaysCoveredWithSettingsFocusedInSplitScreen() {
+        org.junit.Assume.assumeTrue("Legacy emulator split-screen entry point; qualify newer OEM entry points separately", android.os.Build.VERSION.SDK_INT < 31)
+        configure(true)
+        val match = RuleEngine.shouldBlock(context, fixturePackage)
+        Prefs.allowPackageUntil(context, fixturePackage, System.currentTimeMillis() + 120_000, match.policyToken)
+        openFixture()
+        assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 5000))
+        assertTrue(instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)
+            .performGlobalAction(android.accessibilityservice.AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN))
+        shell("am start -W -a android.settings.SETTINGS")
+        assertTrue(device.wait(Until.hasObject(By.pkg("com.android.settings")), 8000))
+        val fixture = device.findObject(By.text("Fixture distraction"))
+        assertNotNull("Both application panes must actually be visible", fixture)
+        val fixtureBounds = fixture.visibleBounds
+        val settings = device.findObject(By.pkg("com.android.settings").depth(0))
+        assertNotNull(settings)
+        assertFalse("Expected separate split panes", android.graphics.Rect.intersects(fixtureBounds, settings.visibleBounds))
+        device.click(settings.visibleBounds.centerX(), settings.visibleBounds.centerY())
+        Prefs.allowPackageUntil(context, fixturePackage, 0)
+        assertTrue(device.wait(Until.hasObject(By.desc("DK blocked pane")), 8000))
+        val overlay = device.findObject(By.desc("DK blocked pane"))
+        assertTrue("Blocking surface must cover the distraction", android.graphics.Rect.intersects(overlay.visibleBounds, fixtureBounds))
+        assertFalse("Settings must remain outside the blocking surface", android.graphics.Rect.intersects(overlay.visibleBounds, settings.visibleBounds))
+        device.click(settings.visibleBounds.centerX(), settings.visibleBounds.centerY())
+        assertTrue(device.hasObject(By.pkg("com.android.settings")))
+        assertTrue(device.hasObject(By.desc("DK blocked pane")))
+        assertTrue(device.takeScreenshot(java.io.File(context.getExternalFilesDir(null), "split-recovery.png")))
+        device.pressHome()
     }
 }

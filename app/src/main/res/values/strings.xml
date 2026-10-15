@@ -1,4 +1,7 @@
 <resources>
     <string name="app_name">DK App Blocker</string>
+    <string name="review_block">Review block</string>
+    <string name="review_blocked_pane">Review blocked pane</string>
+    <string name="go_home">Go home</string>
     <string name="accessibility_description">Blocks selected apps when your schedules, limits, focus sessions or location rules are active.</string>
 </resources>

@@ -24,7 +24,7 @@
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:icon="@drawable/ic_shield"
-        android:label="DK App Blocker"
+        android:label="${appLabel}"
         android:supportsRtl="true"
         android:theme="@style/Theme.DKAppBlocker">
 
@@ -52,7 +52,7 @@
         <service
             android:name=".BlockAccessibilityService"
             android:exported="false"
-            android:label="DK App Blocker"
+            android:label="${appLabel}"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -66,7 +66,7 @@
             android:name=".StrictDeviceAdminReceiver"
             android:description="@string/app_name"
             android:exported="true"
-            android:label="DK App Blocker Strict Mode"
+            android:label="${appLabel} Strict Mode"
             android:permission="android.permission.BIND_DEVICE_ADMIN">
             <meta-data
                 android:name="android.app.device_admin"

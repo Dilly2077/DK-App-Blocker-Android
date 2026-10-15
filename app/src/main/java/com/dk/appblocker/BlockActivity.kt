@@ -108,6 +108,7 @@ private fun BlockedScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     val settings = Prefs.getBlockScreen(context)
     val strictSettings = Prefs.getStrict(context)
+    val gate = BlockingPolicy.breakGate(strict, strictSettings)
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
     var showPassword by remember { mutableStateOf(false) }
@@ -159,18 +160,16 @@ private fun BlockedScreen(
             if (allowBreaks) {
                 OutlinedButton(
                     onClick = {
-                        if (!strict || !strictSettings.enabled) {
-                            onBreakGranted()
-                        } else {
-                            when (strictSettings.unlockMethod ?: "PASSWORD") {
-                                "BIOMETRIC" -> launchBiometricVerification(
+                        when (gate) {
+                                BlockingPolicy.BreakGate.FREE -> onBreakGranted()
+                                BlockingPolicy.BreakGate.BIOMETRIC -> launchBiometricVerification(
                                     context,
                                     onSuccess = onBreakGranted,
                                     onError = { biometricError = it }
                                 )
-                                "TIMER" -> biometricError = "Breaks are unavailable while timer-based Strict Mode is active."
-                                else -> showPassword = true
-                            }
+                                BlockingPolicy.BreakGate.TIMER -> biometricError = "Breaks are unavailable while timer-based Strict Mode is active."
+                                BlockingPolicy.BreakGate.PASSWORD -> showPassword = true
+                                BlockingPolicy.BreakGate.PASSWORD_SETUP -> biometricError = "Set a password in Profile → Strict Mode before taking a strict-rule break."
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -178,6 +177,9 @@ private fun BlockedScreen(
                     border = androidx.compose.foundation.BorderStroke(1.dp, accent)
                 ) {
                     Text("Take a 5-minute break", color = Color.White)
+                }
+                if (gate == BlockingPolicy.BreakGate.BIOMETRIC && strictSettings.pinHash.isNotBlank()) {
+                    TextButton(onClick = { showPassword = true }) { Text("Use recovery password") }
                 }
                 if (biometricError.isNotBlank()) {
                     Text(biometricError, color = Color(0xFFFF8A84), fontSize = 12.sp, textAlign = TextAlign.Center)

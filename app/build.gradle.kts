@@ -9,10 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.dk.appblocker"
+        applicationId = if (providers.gradleProperty("isolatedDeviceAudit").orNull == "true") "com.dk.appblocker.audit" else "com.dk.appblocker"
+        manifestPlaceholders["appLabel"] = if (providers.gradleProperty("isolatedDeviceAudit").orNull == "true") "DK App Blocker Audit" else "DK App Blocker"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
+        versionCode = 4
         versionName = "0.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -44,6 +45,11 @@ android {
         compose = true
     }
     testOptions { unitTests.isIncludeAndroidResources = true }
+}
+
+// Device audits must not clear or replace the user's installed blocker or its local data.
+if (providers.gradleProperty("isolatedDeviceAudit").orNull == "true") {
+    layout.buildDirectory.set(rootProject.layout.projectDirectory.dir(".tools/device-audit-build"))
 }
 
 dependencies {
