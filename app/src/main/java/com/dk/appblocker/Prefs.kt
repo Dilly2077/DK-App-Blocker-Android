@@ -23,6 +23,31 @@ object Prefs {
 
     private fun p(context: Context) = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
+    // SharedPreferences updates its memory cache even when commit() returns false. Restore only
+    // affected keys under this lock so enforcement/UI cannot observe an unconfirmed policy change.
+    @Synchronized
+    private fun writeDurably(context: Context, changes: Map<String, Any?>): Boolean {
+        val prefs = p(context)
+        val previous = changes.keys.associateWith { prefs.all[it] }
+        fun write(values: Map<String, Any?>): Boolean {
+            val editor = prefs.edit()
+            values.forEach { (key, value) -> when (value) {
+                null -> editor.remove(key)
+                is String -> editor.putString(key, value)
+                is Long -> editor.putLong(key, value)
+                is Int -> editor.putInt(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Set<*> -> editor.putStringSet(key, value.filterIsInstance<String>().toSet())
+                else -> error("Unsupported preference type")
+            } }
+            return runCatching { editor.commit() }.getOrDefault(false)
+        }
+        if (write(changes)) return true
+        write(previous)
+        return false
+    }
+
+    @Synchronized
     fun getPlans(context: Context): MutableList<BlockPlan> {
         val json = p(context).getString(KEY_PLANS, null) ?: return mutableListOf()
         return runCatching {
@@ -37,9 +62,23 @@ object Prefs {
         }.getOrDefault(mutableListOf())
     }
 
-    fun savePlans(context: Context, plans: List<BlockPlan>): Boolean =
-        p(context).edit().putString(KEY_PLANS, gson.toJson(plans)).commit()
+    @Synchronized
+    fun savePlans(context: Context, plans: List<BlockPlan>): Boolean {
+        val previous = getPlans(context).associateBy { it.id }
+        val retained = plans.filter { plan ->
+            plan.enabled && plan.triggerType == TriggerType.LOCATION && previous[plan.id]?.let {
+                it.latitude == plan.latitude && it.longitude == plan.longitude && it.radiusMeters == plan.radiusMeters
+            } == true
+        }.map { it.id }.toSet()
+        val desired = GeofenceSpec.desired(plans).toSet()
+        val obsolete = previous.values.filter { it.triggerType == TriggerType.LOCATION }.map(GeofenceSpec::from)
+            .filter { it !in desired }.flatMap { listOf(it.id, it.registrationId) }
+        val pending = pendingGeofenceRemovals(context) + obsolete
+        return writeDurably(context, mapOf(KEY_PLANS to gson.toJson(plans), KEY_GEOFENCES to getActiveGeofences(context).intersect(retained),
+            "geofence_pending_remove" to pending.toSet()))
+    }
 
+    @Synchronized
     fun getStrict(context: Context): StrictSettings {
         val json = p(context).getString(KEY_STRICT, null) ?: return StrictSettings()
         val parsed = runCatching { gson.fromJson(json, StrictSettings::class.java) ?: StrictSettings() }
@@ -73,10 +112,53 @@ object Prefs {
         return normalized
     }
 
-    fun saveStrict(context: Context, settings: StrictSettings) {
-        p(context).edit().putString(KEY_STRICT, gson.toJson(settings)).commit()
+    @Synchronized
+    fun saveStrict(context: Context, settings: StrictSettings): Boolean =
+        writeDurably(context, mapOf(KEY_STRICT to gson.toJson(settings)))
+
+    /** Natural expiry still permits recovery if disk cleanup fails, without claiming a saved disable. */
+    @Synchronized
+    fun strictSnapshot(context: Context): StrictSnapshot {
+        val effective = getStrict(context)
+        val stored = runCatching { gson.fromJson(p(context).getString(KEY_STRICT, null), StrictSettings::class.java) }.getOrNull()
+        return StrictSnapshot(effective, stored?.enabled == true && !effective.enabled)
     }
 
+    @Synchronized
+    fun disableStrictDurably(context: Context): Boolean {
+        val current = getStrict(context)
+        if (current.enabled && current.unlockMethod == "TIMER" && strictRemaining(context) > 0) return false
+        return writeDurably(context, mapOf(KEY_STRICT to gson.toJson(current.copy(enabled = false, lockUntil = 0L, lockElapsedEnd = 0L)),
+            "${KEY_EDIT_LOCKED_UNTIL}_deadline" to deadlineJson(context, current.editCooldownMinutes * 60_000L)))
+    }
+
+    @Synchronized
+    fun configureStrict(context: Context, draft: StrictSettings): PolicyWrite {
+        val current = getStrict(context)
+        if (current.enabled) return PolicyWrite.LOCKED
+        val safe = draft.copy(enabled = false, pinHash = current.pinHash,
+            unlockMethod = draft.unlockMethod?.takeIf { it in setOf("TIMER", "PASSWORD", "BIOMETRIC") } ?: "PASSWORD",
+            timerDurationMinutes = draft.timerDurationMinutes.coerceIn(5, 1440), editCooldownMinutes = draft.editCooldownMinutes.coerceIn(0, 60),
+            lockUntil = 0L, lockElapsedEnd = 0L, lockBoot = -1)
+        return if (saveStrict(context, safe)) PolicyWrite.SAVED else PolicyWrite.STORAGE_ERROR
+    }
+
+    @Synchronized
+    fun activateStrict(context: Context): PolicyWrite {
+        val current = getStrict(context)
+        if (current.enabled || (current.unlockMethod != "TIMER" && current.pinHash.isBlank())) return PolicyWrite.LOCKED
+        val duration = if (current.unlockMethod == "TIMER") current.timerDurationMinutes * 60_000L else 0L
+        return if (saveStrict(context, current.copy(enabled = true, lockUntil = if (duration > 0) System.currentTimeMillis() + duration else 0L,
+                lockElapsedEnd = if (duration > 0) SystemClock.elapsedRealtime() + duration else 0L, lockBoot = boot(context)))) PolicyWrite.SAVED else PolicyWrite.STORAGE_ERROR
+    }
+
+    @Synchronized
+    fun changePlans(context: Context, change: (List<BlockPlan>) -> List<BlockPlan>): PolicyWrite {
+        if (!canEditRules(context)) return PolicyWrite.LOCKED
+        return if (savePlans(context, change(getPlans(context)))) PolicyWrite.SAVED else PolicyWrite.STORAGE_ERROR
+    }
+
+    @Synchronized
     fun getBlockScreen(context: Context): BlockScreenSettings {
         val json = p(context).getString(KEY_BLOCK_SCREEN, null) ?: return BlockScreenSettings()
         return runCatching {
@@ -91,7 +173,7 @@ object Prefs {
     }
 
     fun saveBlockScreen(context: Context, settings: BlockScreenSettings): Boolean =
-        p(context).edit().putString(KEY_BLOCK_SCREEN, gson.toJson(settings)).commit()
+        writeDurably(context, mapOf(KEY_BLOCK_SCREEN to gson.toJson(settings)))
 
     fun hashPin(pin: String): String = CredentialHasher.hash(pin)
 
@@ -115,8 +197,7 @@ object Prefs {
     fun replacePin(context: Context, old: String, replacement: String): Boolean {
         if (replacement.length !in 4..64) return false
         if (getStrict(context).pinHash.isNotBlank() && !checkPin(context, old)) return false
-        saveStrict(context, getStrict(context).copy(pinHash = hashPin(replacement)))
-        return true
+        return saveStrict(context, getStrict(context).copy(pinHash = hashPin(replacement)))
     }
 
     fun boot(context: Context): Int = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, 0)
@@ -138,20 +219,43 @@ object Prefs {
     fun canEditRules(context: Context): Boolean = getStrict(context).let { !it.enabled || !it.blockRuleChanges } && editLockedUntil(context) <= System.currentTimeMillis()
 
     @Synchronized
-    fun setActiveGeofence(context: Context, id: String, active: Boolean) {
+    fun setActiveGeofence(context: Context, id: String, active: Boolean, registrationId: String? = null) {
+        if (registrationId != null && getPlans(context).none { it.id == id && it.enabled &&
+                it.triggerType == TriggerType.LOCATION && GeofenceSpec.from(it).registrationId == registrationId }) return
+        if (active && getPlans(context).none { it.id == id && it.enabled && it.triggerType == TriggerType.LOCATION &&
+                (registrationId == null || GeofenceSpec.from(it).registrationId == registrationId) }) return
         val current = getActiveGeofences(context).toMutableSet()
         if (active) current += id else current -= id
         p(context).edit().putStringSet(KEY_GEOFENCES, current).commit()
     }
 
+    @Synchronized
     fun getActiveGeofences(context: Context): Set<String> =
         p(context).getStringSet(KEY_GEOFENCES, emptySet())?.toSet() ?: emptySet()
 
     fun clearGeofences(context: Context) { p(context).edit().remove(KEY_GEOFENCES).commit() }
+    fun invalidateGeofenceRegistrations(context: Context): Boolean = writeDurably(context, mapOf(KEY_GEOFENCES to emptySet<String>(),
+        "geofence_registered_specs" to "[]", "geofence_registration_boot" to -1, "geofence_fingerprint" to null))
     fun geofenceStatus(context: Context): String = p(context).getString("geofence_status", "Not registered") ?: "Not registered"
     fun setGeofenceStatus(context: Context, status: String) { p(context).edit().putString("geofence_status", status).apply() }
     fun geofenceFingerprint(context: Context): String? = p(context).getString("geofence_fingerprint", null)
     fun setGeofenceFingerprint(context: Context, fingerprint: String?) { p(context).edit().putString("geofence_fingerprint", fingerprint).apply() }
+
+    fun registeredGeofences(context: Context): List<GeofenceSpec> = runCatching {
+        gson.fromJson<List<GeofenceSpec>>(p(context).getString("geofence_registered_specs", "[]"),
+            object : TypeToken<List<GeofenceSpec>>() {}.type) ?: emptyList()
+    }.getOrDefault(emptyList())
+    fun saveRegisteredGeofences(context: Context, specs: List<GeofenceSpec>): Boolean =
+        writeDurably(context, mapOf("geofence_registered_specs" to gson.toJson(specs), "geofence_registration_boot" to boot(context)))
+    fun geofenceRegistrationBoot(context: Context): Int = p(context).getInt("geofence_registration_boot", -1)
+    fun pendingGeofenceRemovals(context: Context): Set<String> = p(context).getStringSet("geofence_pending_remove", emptySet()).orEmpty().toSet()
+    fun finishGeofenceSync(context: Context, specs: List<GeofenceSpec>): Boolean = writeDurably(context, mapOf(
+        "geofence_registered_specs" to gson.toJson(specs), "geofence_registration_boot" to boot(context), "geofence_pending_remove" to emptySet<String>()))
+    @Synchronized
+    fun retainActiveGeofences(context: Context, ids: Set<String>): Boolean =
+        getActiveGeofences(context).let { current -> current.intersect(ids).let { next ->
+            current == next || writeDurably(context, mapOf(KEY_GEOFENCES to next))
+        } }
 
     fun addBlockEvent(context: Context, event: BlockEvent) {
         val events = getBlockEvents(context).toMutableList()
@@ -180,15 +284,14 @@ object Prefs {
         if (safePackages.isEmpty()) return FocusStartResult.NO_APPS
         val session = FocusSession.create(safePackages, durationMillis, System.currentTimeMillis(),
             SystemClock.elapsedRealtime(), boot(context)) ?: return FocusStartResult.INVALID_DURATION
-        return if (p(context).edit().putString("focus_session", gson.toJson(session))
-                .putStringSet("focus_selection", safePackages).commit()) FocusStartResult.STARTED else FocusStartResult.STORAGE_ERROR
+        return if (writeDurably(context, mapOf("focus_session" to gson.toJson(session), "focus_selection" to safePackages))) FocusStartResult.STARTED else FocusStartResult.STORAGE_ERROR
     }
 
     @Synchronized
     fun stopFocus(context: Context): Boolean = canEditRules(context) && clearFocus(context)
 
-    private fun clearFocus(context: Context): Boolean = p(context).edit().remove("focus_session")
-        .remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).remove("focus_deadline").commit()
+    private fun clearFocus(context: Context): Boolean = writeDurably(context, mapOf("focus_session" to null,
+        KEY_FOCUS_END to null, KEY_FOCUS_PACKAGES to null, "focus_deadline" to null))
 
     /** Reboot ends focus safely. Expiry is also enforced by the service without opening Home. */
     @Synchronized
@@ -231,7 +334,7 @@ object Prefs {
     fun focusPackages(context: Context): Set<String> = focusSession(context)?.packages?.toSet() ?: emptySet()
     fun focusSelection(context: Context): Set<String> = p(context).getStringSet("focus_selection", emptySet()).orEmpty().toSet()
     fun saveFocusSelection(context: Context, packages: Set<String>): Boolean =
-        p(context).edit().putStringSet("focus_selection", packages.toSet()).commit()
+        writeDurably(context, mapOf("focus_selection" to packages.toSet()))
 
     fun allowPackageUntil(context: Context, pkg: String, until: Long, policyToken: String = "") {
         p(context).edit().putString(KEY_ALLOW_UNTIL_PREFIX + pkg + "_deadline", deadlineJson(context, until - System.currentTimeMillis()))

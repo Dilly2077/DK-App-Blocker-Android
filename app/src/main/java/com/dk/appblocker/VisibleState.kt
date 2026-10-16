@@ -28,13 +28,15 @@ internal fun rememberVisibleTick(): Long {
     return tick
 }
 
-internal data class BlockingPermissions(val accessibility: Boolean, val usage: Boolean)
+internal data class BlockingPermissions(val accessibility: Boolean, val usage: Boolean, val connected: Boolean = false) {
+    val operational: Boolean get() = accessibility && connected
+}
 
 @Composable
 internal fun rememberBlockingPermissions(tick: Long): BlockingPermissions {
     val context = LocalContext.current
     val lifecycle = (context as LifecycleOwner).lifecycle
-    fun read() = BlockingPermissions(isAccessibilityEnabled(context), hasUsageAccess(context))
+    fun read() = BlockingPermissions(isAccessibilityEnabled(context), hasUsageAccess(context), BlockAccessibilityService.connected)
     var state by remember(context) { mutableStateOf(read()) }
     // No temporary false/default state on composition or resume. Observe grants/revocations as well.
     DisposableEffect(context, lifecycle) {

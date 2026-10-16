@@ -42,6 +42,8 @@ data class StrictSettings(
     val lockBoot: Int = -1
 )
 
+data class StrictSnapshot(val settings: StrictSettings, val recoveryPending: Boolean)
+
 data class BlockScreenSettings(
     val title: String = "Blocked",
     val message: String = "Stay focused. {app} is blocked right now.",

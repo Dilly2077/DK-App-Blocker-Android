@@ -97,7 +97,7 @@ private fun colorFromHex(hex: String, fallback: Int): Color =
     runCatching { Color(AndroidColor.parseColor(hex)) }.getOrElse { Color(fallback) }
 
 @Composable
-private fun BlockedScreen(
+internal fun BlockedScreen(
     appLabel: String,
     reason: String,
     strict: Boolean,
@@ -122,24 +122,26 @@ private fun BlockedScreen(
         .replace("{app}", appLabel)
         .replace("{reason}", reason)
 
-    Box(
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(background, background.copy(alpha = .96f), Color.Black)))
-            .safeDrawingPadding().imePadding().verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(28.dp)
+            .safeDrawingPadding().imePadding()
     ) {
+        val compact = maxHeight < 500.dp
         Column(
-            Modifier.align(Alignment.Center),
+            Modifier.align(Alignment.Center).widthIn(max = 480.dp).fillMaxWidth()
+                .verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(if (compact) 12.dp else 18.dp)
         ) {
             Box(
-                Modifier.size(120.dp).background(accent.copy(alpha = .15f), CircleShape),
+                Modifier.size(if (compact) 64.dp else 88.dp).background(accent.copy(alpha = .12f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Rounded.Lock, null, tint = accent, modifier = Modifier.size(56.dp))
+                Icon(Icons.Rounded.Lock, null, tint = accent, modifier = Modifier.size(if (compact) 30.dp else 40.dp))
             }
-            Text(settings.title, color = Color.White, fontSize = 34.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
+            Text(settings.title, color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Bold, textAlign = TextAlign.Center)
             if (settings.showAppName) {
                 Text(appLabel, color = accent, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center)
             }
@@ -148,7 +150,7 @@ private fun BlockedScreen(
 
             Button(
                 onClick = onHome,
-                modifier = Modifier.fillMaxWidth().height(56.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp),
                 shape = RoundedCornerShape(18.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = accent, contentColor = Color.Black)
             ) {
@@ -169,10 +171,10 @@ private fun BlockedScreen(
                                 )
                                 BlockingPolicy.BreakGate.TIMER -> biometricError = "Breaks are unavailable while timer-based Strict Mode is active."
                                 BlockingPolicy.BreakGate.PASSWORD -> showPassword = true
-                                BlockingPolicy.BreakGate.PASSWORD_SETUP -> biometricError = "Set a password in Profile → Strict Mode before taking a strict-rule break."
+                                BlockingPolicy.BreakGate.PASSWORD_SETUP -> biometricError = "Set a password in Settings → Strict Mode before taking a strict-rule break."
                         }
                     },
-                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
                     shape = RoundedCornerShape(18.dp),
                     border = androidx.compose.foundation.BorderStroke(1.dp, accent)
                 ) {

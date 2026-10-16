@@ -16,6 +16,10 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.*
 
 class BlockAccessibilityService : AccessibilityService() {
+    companion object {
+        @Volatile var connected: Boolean = false
+            private set
+    }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var checkJob: Job? = null
     private var lastPackage: String? = null
@@ -26,11 +30,14 @@ class BlockAccessibilityService : AccessibilityService() {
     private data class AppWindow(val id: Int, val pkg: String, val bounds: PaneProtection.Bounds)
 
     override fun onServiceConnected() {
+        connected = true
         scope.launch {
-            while (isActive) {
-                checkVisibleWindows()
-                delay(2000) // Window events handle switches; shared usage samples are refreshed at most every five seconds.
-            }
+            try {
+                while (isActive) {
+                    checkVisibleWindows()
+                    delay(2000) // Window events handle switches; shared usage samples are refreshed at most every five seconds.
+                }
+            } finally { connected = false }
         }
     }
 
@@ -133,5 +140,5 @@ class BlockAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() { checkJob?.cancel(); paneOverlay.clear() }
-    override fun onDestroy() { scope.cancel(); paneOverlay.clear(); super.onDestroy() }
+    override fun onDestroy() { connected = false; scope.cancel(); paneOverlay.clear(); super.onDestroy() }
 }

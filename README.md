@@ -2,11 +2,13 @@
 
 A local-first Android app blocker with schedule, daily usage limit, location/geofence and manual blocking rules. It also includes focus sessions, local insights and a Strict Mode PIN.
 
-## Version 0.3.1
+## Version 0.4.0
 
-The 0.3.1 update fixes the Accessibility setup banner and adds custom Quick Focus hours/minutes, a live countdown with days, actual session apps and accurate elapsed-time progress. See [0.3.1 implementation and verification](RELEASE_NOTES_0.3.1.md). Builds and tests run locally; physical-device qualification remains pending.
+The 0.4.0 update adds a focus-first dashboard, rule filters and Edit/Duplicate/Delete menus, accurate protection status, durable Strict Mode drafts, safer location reconciliation, period-aware Insights and organised Settings. It preserves long Quick Focus sessions, existing rules, green/black styling and local data. See [0.4.0 changes and verification](RELEASE_NOTES_0.4.0.md). Builds and tests run locally; physical-device qualification remains pending.
 
 ### Previous audits
+
+The [0.3.1 update](RELEASE_NOTES_0.3.1.md) fixed the Accessibility setup banner and added custom hours/minutes, live countdowns, session apps and elapsed-time progress.
 
 See [release notes](RELEASE_NOTES_0.3.0.md) and [audit disposition and verification](AUDIT_RESULTS_0.3.0.md) for changes, test coverage, recovery and remaining device limitations.
 
@@ -20,7 +22,9 @@ The [second-audit testing build](SECOND_AUDIT_RESULTS_0.3.0.md) keeps version 0.
 - Custom Quick Focus sessions, including short sessions and durations longer than 24 hours.
 - Accessibility-based foreground app interception and a dedicated block screen.
 - Strict rules with optional 5-minute breaks and a PIN challenge.
-- Local screen-time list and 7-day blocked-attempt chart.
+- Day/Week/Month insights with OS-reported screen time and accessible recorded-attempt charts.
+- Rule filters and confirmed deletion/duplication, with Strict Mode checks on every mutation.
+- Settings grouped by protection, permissions, appearance, data and about.
 - Local-only configuration export to JSON clipboard.
 - No account, ads, analytics SDK, telemetry API or subscription code.
 
@@ -36,7 +40,7 @@ Location rules require Location permission; for reliable background geofence tra
 
 ## Install / APK
 
-Builds run locally on the PC hosting this workspace. Download [0.3.1's locally built APK](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/download/v0.3.1-local/DK-App-Blocker-0.3.1-local.apk) from the [0.3.1 testing release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.1-local). Use `DK-App-Blocker-0.3.1-local.apk` for normal installation. That release also includes the unsigned release validation build, test/audit companion APKs, checksums and verification records. Device qualification remains pending. The [second-audit 0.3.0 build](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.0-local-audit2) and [original local build](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.0-local) remain available for history. Unsigned release APKs require signing; instrumentation APKs are not the normal app.
+Builds run locally on the PC hosting this workspace. Download [0.4.0's locally built APK](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/download/v0.4.0-local/DK-App-Blocker-0.4.0-local.apk) from the [0.4.0 testing release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.4.0-local). Use `DK-App-Blocker-0.4.0-local.apk` for normal installation. That release also includes the unsigned release validation build, test/audit companion APKs, checksums, verification records and native-rendered UI previews. Device qualification remains pending. [0.3.1](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.1-local) and the older local builds remain available in Releases. Unsigned release APKs require signing; instrumentation APKs are not the normal app.
 
 The signed debug APK can be sideloaded after enabling installation from the browser/file manager used to open it. Reuse the same local signing key for future compatible updates. A differently signed previous build can require uninstalling first, deleting its local data.
 

@@ -15,6 +15,6 @@ class NavigationTest {
         compose.onNodeWithTag("mainPager").performTouchInput { swipeLeft() }
         compose.onNodeWithText("Local tools, no subscription").assertIsDisplayed()
         compose.onNodeWithText("Home").performClick()
-        compose.onNodeWithText("Stay focused\ntoday 🍃").assertIsDisplayed()
+        compose.onNodeWithText("Your focus, first.").assertIsDisplayed()
     }
 }

@@ -9,111 +9,122 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.Geofence
-import com.google.android.gms.location.GeofencingClient
 import com.google.android.gms.location.GeofencingEvent
 import com.google.android.gms.location.GeofencingRequest
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.Task
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 class GeofenceReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val event = GeofencingEvent.fromIntent(intent) ?: return
-        if (event.hasError()) {
-            Prefs.clearGeofences(context)
-            Prefs.setGeofenceFingerprint(context, null)
-            Prefs.setGeofenceStatus(context, "Geofence error ${event.errorCode}; reopen the app to retry")
-            return
-        }
-        if (!GeofenceManager.hasPermissions(context)) { Prefs.clearGeofences(context); return }
-        val active = event.geofenceTransition == Geofence.GEOFENCE_TRANSITION_ENTER ||
-            event.geofenceTransition == Geofence.GEOFENCE_TRANSITION_DWELL
-        val exiting = event.geofenceTransition == Geofence.GEOFENCE_TRANSITION_EXIT
-        event.triggeringGeofences?.forEach { geofence ->
-            if (Prefs.getPlans(context).none { it.id == geofence.requestId && it.enabled && it.triggerType == TriggerType.LOCATION }) return@forEach
-            if (active) Prefs.setActiveGeofence(context, geofence.requestId, true)
-            if (exiting) Prefs.setActiveGeofence(context, geofence.requestId, false)
+        val pending = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                if (event.hasError() || !GeofenceManager.hasPermissions(context)) {
+                    Prefs.invalidateGeofenceRegistrations(context)
+                    Prefs.setGeofenceStatus(context, "Location events unavailable; reopen the app to retry")
+                    return@launch
+                }
+                val entering = event.geofenceTransition in setOf(Geofence.GEOFENCE_TRANSITION_ENTER, Geofence.GEOFENCE_TRANSITION_DWELL)
+                val exiting = event.geofenceTransition == Geofence.GEOFENCE_TRANSITION_EXIT
+                val specs = GeofenceSpec.desired(Prefs.getPlans(context))
+                event.triggeringGeofences?.forEach { fence ->
+                    val spec = specs.firstOrNull { it.registrationId == fence.requestId } ?: return@forEach
+                    if (entering || exiting) Prefs.setActiveGeofence(context, spec.id, entering, spec.registrationId)
+                }
+            } finally { pending.finish() }
         }
     }
 }
 
 object GeofenceManager {
-    private var syncing = false
-    private var retry = false
-
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val syncLock = Mutex()
     fun hasPermissions(context: Context): Boolean =
         ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
             (Build.VERSION.SDK_INT < 29 || ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED)
-    private fun pendingIntent(context: Context): PendingIntent {
-        val intent = Intent(context, GeofenceReceiver::class.java)
-        return PendingIntent.getBroadcast(
-            context,
-            901,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-        )
+
+    private suspend fun <T> Task<T>.awaitLocal(): T = suspendCancellableCoroutine { continuation ->
+        addOnCompleteListener { task ->
+            if (!continuation.isActive) return@addOnCompleteListener
+            if (task.isSuccessful) continuation.resume(task.result)
+            else continuation.resumeWithException(task.exception ?: IllegalStateException("Location operation failed"))
+        }
     }
 
     fun sync(context: Context, plans: List<BlockPlan> = Prefs.getPlans(context), onComplete: () -> Unit = {}) {
-        if (syncing) { retry = true; onComplete(); return }
-        val locationPlans = plans.filter {
-            it.enabled &&
-                it.triggerType == TriggerType.LOCATION &&
-                (it.locationConfigured || it.latitude != 0.0 || it.longitude != 0.0) &&
-                it.latitude in -90.0..90.0 &&
-                it.longitude in -180.0..180.0 && it.radiusMeters.isFinite()
-        }
-        val fingerprint = com.google.gson.Gson().toJson(locationPlans) + hasPermissions(context) + Prefs.boot(context)
-        if (fingerprint == Prefs.geofenceFingerprint(context)) { onComplete(); return }
-        Prefs.clearGeofences(context)
-        Prefs.setGeofenceFingerprint(context, null)
-        if (!hasPermissions(context)) {
-            Prefs.setGeofenceStatus(context, "Grant precise and background location in Android Settings, then reopen the app")
-            onComplete()
-            return
-        }
-        if (locationPlans.size > 100) {
-            Prefs.setGeofenceStatus(context, "Android supports up to 100 location rules; disable extra rules")
-            onComplete()
-            return
-        }
-        syncing = true
-        fun complete(error: Exception? = null) {
-            syncing = false
-            Prefs.setGeofenceFingerprint(context, if (error == null) fingerprint else null)
-            Prefs.setGeofenceStatus(context, if (error == null) "${locationPlans.size} location rules registered" else "Registration failed: ${error.javaClass.simpleName}. Check permissions and Google Play services, then reopen the app.")
-            onComplete()
-            if (retry) { retry = false; sync(context.applicationContext) }
-        }
-        val client: GeofencingClient = LocationServices.getGeofencingClient(context)
-        val pi = pendingIntent(context)
-        client.removeGeofences(pi).addOnCompleteListener { removal ->
-            if (!removal.isSuccessful) { complete(removal.exception ?: IllegalStateException("Removal failed")); return@addOnCompleteListener }
-            if (locationPlans.isEmpty()) { complete(); return@addOnCompleteListener }
-            val geofences = locationPlans.map { plan ->
-                Geofence.Builder()
-                    .setRequestId(plan.id)
-                    .setCircularRegion(plan.latitude, plan.longitude, plan.radiusMeters.coerceAtLeast(100f))
-                    .setExpirationDuration(Geofence.NEVER_EXPIRE)
-                    .setTransitionTypes(
-                        Geofence.GEOFENCE_TRANSITION_ENTER or
-                            Geofence.GEOFENCE_TRANSITION_EXIT or
-                            Geofence.GEOFENCE_TRANSITION_DWELL
-                    )
-                    .setLoiteringDelay(60_000)
-                    .setNotificationResponsiveness(30_000)
-                    .build()
+        // Re-read durable plans in the serialised job; a caller's snapshot may already be stale.
+        @Suppress("UNUSED_VARIABLE") val callerSnapshot = plans
+        val app = context.applicationContext
+        scope.launch {
+            try { syncLock.withLock { reconcile(app) } }
+            catch (error: Exception) {
+                if (!hasPermissions(app)) Prefs.clearGeofences(app)
+                Prefs.setGeofenceFingerprint(app, null)
+                Prefs.setGeofenceStatus(app, "Location sync unavailable; reopen to retry")
             }
-            val request = GeofencingRequest.Builder()
-                .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER)
-                .addGeofences(geofences)
-                .build()
-            try {
-                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                    complete(SecurityException("Location permission revoked")); return@addOnCompleteListener
+            finally { withContext(Dispatchers.Main) { onComplete() } }
+        }
+    }
+
+    private suspend fun reconcile(context: Context) {
+        val desired = GeofenceSpec.desired(Prefs.getPlans(context))
+        val knownBoot = Prefs.geofenceRegistrationBoot(context)
+        val bootChanged = knownBoot >= 0 && knownBoot != Prefs.boot(context)
+        val previous = if (bootChanged) emptyList() else Prefs.registeredGeofences(context)
+        val allowed = hasPermissions(context)
+        if (!allowed || bootChanged) Prefs.clearGeofences(context)
+        else Prefs.retainActiveGeofences(context, desired.filter { knownBoot < 0 || it in previous }.map { it.id }.toSet())
+        if (desired.size > 100) {
+            Prefs.setGeofenceStatus(context, "Android supports up to 100 location rules; disable extra rules")
+            return
+        }
+        val fingerprint = com.google.gson.Gson().toJson(desired) + allowed + Prefs.boot(context)
+        if (fingerprint == Prefs.geofenceFingerprint(context) && Prefs.pendingGeofenceRemovals(context).isEmpty()) return
+        val client = LocationServices.getGeofencingClient(context)
+        val pi = PendingIntent.getBroadcast(context, 901, Intent(context, GeofenceReceiver::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+        val backend = object : GeofenceBackend {
+            override suspend fun remove(ids: List<String>) { if (ids.isNotEmpty()) client.removeGeofences(ids).awaitLocal() }
+            override suspend fun add(specs: List<GeofenceSpec>) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED ||
+                    !hasPermissions(context)) throw SecurityException("Location permission revoked")
+                val fences = specs.map {
+                    Geofence.Builder().setRequestId(it.registrationId).setCircularRegion(it.latitude, it.longitude, it.radius)
+                        .setExpirationDuration(Geofence.NEVER_EXPIRE)
+                        .setTransitionTypes(Geofence.GEOFENCE_TRANSITION_ENTER or Geofence.GEOFENCE_TRANSITION_EXIT or Geofence.GEOFENCE_TRANSITION_DWELL)
+                        .setLoiteringDelay(60_000).setNotificationResponsiveness(30_000).build()
                 }
-                client.addGeofences(request, pi).addOnCompleteListener { result ->
-                    complete(if (result.isSuccessful) null else result.exception ?: IllegalStateException("Registration failed"))
-                }
-            } catch (error: SecurityException) { complete(error) }
+                client.addGeofences(GeofencingRequest.Builder().setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER).addGeofences(fences).build(), pi).awaitLocal()
+            }
+        }
+        try {
+            Prefs.setGeofenceStatus(context, "Updating location registrations…")
+            val legacy = if (previous.isEmpty()) Prefs.getPlans(context).filter { it.triggerType == TriggerType.LOCATION }.map { it.id }.toSet() else emptySet()
+            withTimeout(30_000L) {
+                GeofenceReconciliation.reconcile(previous, if (allowed) desired else emptyList(),
+                    Prefs.pendingGeofenceRemovals(context) + legacy + if (!allowed) Prefs.registeredGeofences(context).map { it.registrationId } else emptyList(), backend)
+            }
+            if (!allowed) {
+                Prefs.finishGeofenceSync(context, emptyList())
+                Prefs.setGeofenceFingerprint(context, null)
+                Prefs.setGeofenceStatus(context, "Grant precise and background location for location rules")
+            } else if (GeofenceSpec.desired(Prefs.getPlans(context)) == desired && hasPermissions(context)) {
+                if (!Prefs.finishGeofenceSync(context, desired)) throw IllegalStateException("Could not persist location registrations")
+                Prefs.setGeofenceFingerprint(context, fingerprint)
+                Prefs.setGeofenceStatus(context, "${desired.size} location rules registered")
+            } else {
+                Prefs.setGeofenceFingerprint(context, null)
+                sync(context)
+            }
+        } catch (error: Exception) {
+            if (!hasPermissions(context)) Prefs.clearGeofences(context)
+            Prefs.setGeofenceFingerprint(context, null)
+            Prefs.setGeofenceStatus(context, "Location sync failed; unchanged regions retained. Reopen to retry.")
         }
     }
 }
