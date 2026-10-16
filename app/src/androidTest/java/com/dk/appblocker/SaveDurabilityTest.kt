@@ -17,11 +17,17 @@ class SaveDurabilityTest {
                 assertTrue(Prefs.saveBlockScreen(context, BlockScreenSettings(title = "Durable appearance", accentHex = "#FFD166", showAppName = false)))
                 android.os.Process.killProcess(android.os.Process.myPid())
             }
+            "focus" -> {
+                assertEquals(FocusStartResult.STARTED, Prefs.startFocus(context, setOf("example.saved.focus"), 1500))
+                android.os.Process.killProcess(android.os.Process.myPid())
+            }
             "verify" -> {
                 assertEquals("immediate-save", Prefs.getPlans(context).single().id)
                 assertEquals("Durable appearance", Prefs.getBlockScreen(context).title)
                 assertEquals("#FFD166", Prefs.getBlockScreen(context).accentHex)
                 assertFalse(Prefs.getBlockScreen(context).showAppName)
+                assertEquals(setOf("example.saved.focus"), Prefs.focusPackages(context))
+                assertEquals(90_000_000L, Prefs.focusSession(context)!!.durationMillis)
                 context.getSharedPreferences("dk_blocker_prefs", 0).edit().clear().commit()
             }
             else -> org.junit.Assume.assumeTrue("Run with the local multi-process audit runner", false)

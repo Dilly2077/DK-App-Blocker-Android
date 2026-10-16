@@ -169,19 +169,69 @@ object Prefs {
         }.getOrDefault(emptyList())
     }
 
-    fun startFocus(context: Context, packages: Set<String>, durationMinutes: Int) {
-        val duration = durationMinutes.coerceIn(1, 1440) * 60_000L
-        p(context).edit().putString("focus_deadline", deadlineJson(context, duration))
-            .putLong(KEY_FOCUS_END, System.currentTimeMillis() + duration).putStringSet(KEY_FOCUS_PACKAGES, packages.toSet()).commit()
+    fun startFocus(context: Context, packages: Set<String>, durationMinutes: Int): FocusStartResult =
+        startFocusSession(context, packages, durationMinutes.toLong() * 60_000L)
+
+    @Synchronized
+    fun startFocusSession(context: Context, packages: Set<String>, durationMillis: Long): FocusStartResult {
+        if (!canEditRules(context)) return FocusStartResult.LOCKED
+        if (focusSession(context) != null) return FocusStartResult.ALREADY_ACTIVE
+        val safePackages = packages.filterNot { isRecoveryPackage(context, it) }.toSet()
+        if (safePackages.isEmpty()) return FocusStartResult.NO_APPS
+        val session = FocusSession.create(safePackages, durationMillis, System.currentTimeMillis(),
+            SystemClock.elapsedRealtime(), boot(context)) ?: return FocusStartResult.INVALID_DURATION
+        return if (p(context).edit().putString("focus_session", gson.toJson(session))
+                .putStringSet("focus_selection", safePackages).commit()) FocusStartResult.STARTED else FocusStartResult.STORAGE_ERROR
     }
 
-    fun stopFocus(context: Context) {
-        p(context).edit().remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).remove("focus_deadline").commit()
+    @Synchronized
+    fun stopFocus(context: Context): Boolean = canEditRules(context) && clearFocus(context)
+
+    private fun clearFocus(context: Context): Boolean = p(context).edit().remove("focus_session")
+        .remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).remove("focus_deadline").commit()
+
+    /** Reboot ends focus safely. Expiry is also enforced by the service without opening Home. */
+    @Synchronized
+    fun focusSession(context: Context): FocusSession? {
+        val prefs = p(context)
+        val raw = prefs.getString("focus_session", null)
+        if (raw != null) {
+            val session = runCatching {
+                gson.fromJson(raw, FocusSession::class.java).also {
+                    require(it.id.isNotBlank() && it.packages.isNotEmpty() && it.packages.all(String::isNotBlank))
+                    require(it.durationMillis > 0 && it.startedElapsed >= 0 && it.deadline.elapsedEnd >= it.startedElapsed)
+                    require(it.deadline.elapsedEnd - it.startedElapsed == it.durationMillis)
+                }
+            }.getOrNull()
+            if (session != null && session.remaining(SystemClock.elapsedRealtime(), boot(context)) > 0) return session
+            clearFocus(context)
+            return null
+        }
+        // Upgrade a running 0.3.0 session without extending its deadline. Its original start was not stored.
+        val packages = prefs.getStringSet(KEY_FOCUS_PACKAGES, emptySet()).orEmpty().toSet()
+        if (!prefs.contains("focus_selection") && packages.isNotEmpty()) {
+            prefs.edit().putStringSet("focus_selection", packages).commit()
+        }
+        val legacyRaw = prefs.getString("focus_deadline", null) ?: return null
+        val legacy = runCatching { gson.fromJson(legacyRaw, Deadline::class.java) }.getOrNull()
+        if (legacy == null) { clearFocus(context); return null }
+        val elapsedNow = SystemClock.elapsedRealtime()
+        val left = legacy.remaining(elapsedNow, boot(context))
+        if (left <= 0 || packages.isEmpty() || packages.any { it.isBlank() }) { clearFocus(context); return null }
+        val migrated = FocusSession(java.util.UUID.randomUUID().toString(), packages, left, elapsedNow, legacy)
+        val saved = prefs.edit().putString("focus_session", gson.toJson(migrated))
+            .putStringSet("focus_selection", packages).remove("focus_deadline").remove(KEY_FOCUS_END).remove(KEY_FOCUS_PACKAGES).commit()
+        return migrated.takeIf { saved }
     }
 
-    fun focusEnd(context: Context): Long = remaining(context, "focus").let { if (it > 0) System.currentTimeMillis() + it else 0L }
-    fun focusToken(context: Context): String = p(context).getString("focus_deadline", "").orEmpty()
-    fun focusPackages(context: Context): Set<String> = p(context).getStringSet(KEY_FOCUS_PACKAGES, emptySet())?.toSet() ?: emptySet()
+    fun focusEnd(context: Context): Long = focusSession(context)?.let {
+        runCatching { Math.addExact(System.currentTimeMillis(), it.remaining(SystemClock.elapsedRealtime(), boot(context))) }.getOrDefault(Long.MAX_VALUE)
+    } ?: 0L
+    fun focusToken(context: Context): String = focusSession(context)?.id.orEmpty()
+    fun focusPackages(context: Context): Set<String> = focusSession(context)?.packages?.toSet() ?: emptySet()
+    fun focusSelection(context: Context): Set<String> = p(context).getStringSet("focus_selection", emptySet()).orEmpty().toSet()
+    fun saveFocusSelection(context: Context, packages: Set<String>): Boolean =
+        p(context).edit().putStringSet("focus_selection", packages.toSet()).commit()
 
     fun allowPackageUntil(context: Context, pkg: String, until: Long, policyToken: String = "") {
         p(context).edit().putString(KEY_ALLOW_UNTIL_PREFIX + pkg + "_deadline", deadlineJson(context, until - System.currentTimeMillis()))

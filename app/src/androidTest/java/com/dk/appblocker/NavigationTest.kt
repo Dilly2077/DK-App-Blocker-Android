@@ -13,7 +13,7 @@ class NavigationTest {
         compose.onNodeWithTag("mainPager").performTouchInput { swipeLeft() }
         compose.onNodeWithText("Screen-time access required").assertIsDisplayed()
         compose.onNodeWithTag("mainPager").performTouchInput { swipeLeft() }
-        compose.onNodeWithText("All features unlocked").assertIsDisplayed()
+        compose.onNodeWithText("Local tools, no subscription").assertIsDisplayed()
         compose.onNodeWithText("Home").performClick()
         compose.onNodeWithText("Stay focused\ntoday 🍃").assertIsDisplayed()
     }

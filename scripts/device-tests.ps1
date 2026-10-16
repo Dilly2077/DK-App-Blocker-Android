@@ -46,7 +46,7 @@ try {
     DeviceCommand install -r $product.FullName | Set-Content (Join-Path $ResultsDirectory 'install.txt')
     DeviceCommand install -r -t $testApk.FullName | Out-Null
     Run-Instrumentation 'instrumentation' @('-e','notClass','com.dk.appblocker.PersistenceDeviceTest,com.dk.appblocker.SaveDurabilityTest')
-    foreach ($phase in @('rules','appearance')) {
+    foreach ($phase in @('rules','appearance','focus')) {
         $report = DeviceCommand shell am instrument -w -r -e class com.dk.appblocker.SaveDurabilityTest -e phase $phase $runner
         $report | Set-Content (Join-Path $ResultsDirectory "immediate-kill-$phase.txt")
         if ($report -notmatch 'Process crashed') { throw "Expected immediate process termination after saving $phase" }

@@ -13,8 +13,8 @@ android {
         manifestPlaceholders["appLabel"] = if (providers.gradleProperty("isolatedDeviceAudit").orNull == "true") "DK App Blocker Audit" else "DK App Blocker"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.3.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -68,6 +68,9 @@ dependencies {
     implementation("androidx.fragment:fragment-ktx:1.8.6")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.compose.ui:ui-test-junit4:1.7.8")
+    testImplementation("androidx.test.ext:junit:1.2.1")
+    testImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")

@@ -19,6 +19,35 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class SplitRecoveryServiceTest {
+    @Test fun focusExpiryRemovesAnOverlayWithoutWindowChangesButKeepsIndependentBlocks() {
+        val controller = Robolectric.buildService(BlockAccessibilityService::class.java).create()
+        val service = controller.get()
+        try {
+            service.getSharedPreferences("dk_blocker_prefs", 0).edit().clear().commit()
+            shadowOf(service.getSystemService(Context.POWER_SERVICE) as PowerManager).setIsInteractive(true)
+            shadowOf(service.getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager).setKeyguardLocked(false)
+            fun window(id: Int, pkg: String, top: Int, bottom: Int, focused: Boolean) = AccessibilityWindowInfo.obtain().also {
+                shadowOf(it).apply {
+                    setId(id); setType(AccessibilityWindowInfo.TYPE_APPLICATION); setBoundsInScreen(Rect(0, top, 320, bottom))
+                    setFocused(focused); setActive(focused)
+                    setRoot(AccessibilityNodeInfo.obtain().apply { packageName = pkg })
+                }
+            }
+            val pkg = "example.blocked"
+            shadowOf(service).setWindows(listOf(window(1, "com.android.settings", 0, 220, true), window(2, pkg, 230, 470, false)))
+            fun overlays() = WindowInspector.getGlobalWindowViews().count { it.contentDescription == "DK blocked pane" }
+            Prefs.startFocusSession(service, setOf(pkg), 1000)
+            runBlocking { service.checkVisibleWindows() }; assertEquals(1, overlays())
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(1))
+            runBlocking { service.checkVisibleWindows() }; assertEquals(0, overlays())
+            Prefs.startFocusSession(service, setOf(pkg), 1000)
+            Prefs.savePlans(service, listOf(BlockPlan(triggerType = TriggerType.MANUAL, packages = listOf(pkg), manualActive = true)))
+            runBlocking { service.checkVisibleWindows() }; assertEquals(1, overlays())
+            org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(1))
+            runBlocking { service.checkVisibleWindows() }; assertEquals(1, overlays())
+            assertNull(Prefs.focusSession(service))
+        } finally { controller.destroy() }
+    }
     @Test fun actualServiceInspectsOtherPaneWhileSettingsHasFocusAndRemovesOverlayOnRecoveryFullscreen() {
         val controller = Robolectric.buildService(BlockAccessibilityService::class.java).create()
         val service = controller.get()

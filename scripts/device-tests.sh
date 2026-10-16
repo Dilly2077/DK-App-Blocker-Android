@@ -16,7 +16,7 @@ adb shell am instrument -w -r -e notClass com.dk.appblocker.PersistenceDeviceTes
 grep -q 'OK (' device-results/instrumentation.txt
 if grep -Eq 'FAILURES!!!|INSTRUMENTATION_FAILED|shortMsg=' device-results/instrumentation.txt; then exit 1; fi
 adb pull /sdcard/Android/data/com.dk.appblocker/files device-results/screenshots
-for phase in rules appearance; do
+for phase in rules appearance focus; do
   adb shell am instrument -w -r -e class com.dk.appblocker.SaveDurabilityTest -e phase "$phase" com.dk.appblocker.test/androidx.test.runner.AndroidJUnitRunner | tee "device-results/immediate-kill-$phase.txt"
   grep -q 'Process crashed' "device-results/immediate-kill-$phase.txt"
 done

@@ -7,6 +7,8 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityManager
 import android.os.Build
 import android.os.CancellationSignal
 import android.os.Process
@@ -20,13 +22,24 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 fun isAccessibilityEnabled(context: Context): Boolean {
-    val expected = ComponentName(context, BlockAccessibilityService::class.java).flattenToString()
+    val expected = ComponentName(context, BlockAccessibilityService::class.java)
+    val manager = context.getSystemService(AccessibilityManager::class.java)
+    // Query Android's enabled-service API too, for systems where the secure list is unavailable.
+    val reported = runCatching {
+        manager?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            .orEmpty().any { ComponentName.unflattenFromString(it.id.orEmpty()) == expected }
+    }.getOrDefault(false)
     val enabled = Settings.Secure.getString(
         context.contentResolver,
         Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-    ) ?: return false
-    return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
+    )
+    if (Settings.Secure.getInt(context.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, -1) == 0) return false
+    // An explicit settings list is authoritative during revocation; manager caches may lag behind it.
+    return if (enabled != null) accessibilityListContains(enabled, expected) else manager?.isEnabled == true && reported
 }
+
+internal fun accessibilityListContains(enabled: String, expected: ComponentName): Boolean =
+    enabled.split(':').any { ComponentName.unflattenFromString(it.trim()) == expected }
 
 fun hasUsageAccess(context: Context): Boolean {
     val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager

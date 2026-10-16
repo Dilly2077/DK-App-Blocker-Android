@@ -17,10 +17,10 @@ class PersistenceDeviceTest {
                 Prefs.savePlans(context, listOf(BlockPlan(id = "persisted-rule", triggerType = TriggerType.MANUAL,
                     packages = listOf(pkg), manualActive = true)))
                 Prefs.saveBlockScreen(context, BlockScreenSettings(title = "Persisted appearance"))
+                assertEquals(FocusStartResult.STARTED, Prefs.startFocus(context, setOf(pkg), 1500))
                 Prefs.saveStrict(context, StrictSettings(enabled = true, unlockMethod = "TIMER",
                     lockUntil = System.currentTimeMillis() + 300_000, lockElapsedEnd = SystemClock.elapsedRealtime() + 300_000,
                     lockBoot = Prefs.boot(context)))
-                Prefs.startFocus(context, setOf(pkg), 25)
                 val token = RuleEngine.shouldBlock(context, pkg).policyToken
                 Prefs.allowPackageUntil(context, pkg, System.currentTimeMillis() + 300_000, token)
                 // Flush ordinary asynchronous settings before the process terminates.
@@ -33,6 +33,8 @@ class PersistenceDeviceTest {
                 assertEquals("Persisted appearance", Prefs.getBlockScreen(context).title)
                 assertTrue(Prefs.getStrict(context).enabled)
                 assertTrue(Prefs.focusEnd(context) > System.currentTimeMillis())
+                assertEquals(90_000_000L, Prefs.focusSession(context)!!.durationMillis)
+                assertEquals(setOf(pkg), Prefs.focusPackages(context))
                 assertFalse("Break must survive process restart", RuleEngine.shouldBlock(context, pkg).blocked)
             }
             "reboot" -> {

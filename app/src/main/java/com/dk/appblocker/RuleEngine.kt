@@ -17,13 +17,13 @@ object RuleEngine {
         if (isRecoveryPackage(context, packageName)) return Match(false)
 
         val now = System.currentTimeMillis()
-        val focusEnd = Prefs.focusEnd(context)
-        val focus = focusEnd > now && packageName in Prefs.focusPackages(context)
+        val session = Prefs.focusSession(context)
+        val focus = session != null && packageName in session.packages
         val plans = Prefs.getPlans(context).filter { it.enabled && packageName in it.packages && isPlanActive(context, it) }
         val match = BlockingPolicy.combine(plans, focus)
         val strict = Prefs.getStrict(context)
         val token = com.google.gson.Gson().toJson(plans.sortedBy { it.id }) +
-            (if (focus) Prefs.focusToken(context) else "") + "|${strict.enabled}|${strict.unlockMethod}"
+            (if (focus) session?.id.orEmpty() else "") + "|${strict.enabled}|${strict.unlockMethod}"
         if (match.allowBreaks && token == Prefs.allowedPolicy(context, packageName) && Prefs.packageAllowedUntil(context, packageName) > now) return Match(false)
         return match.copy(policyToken = token, strict = match.strict || strict.enabled)
     }

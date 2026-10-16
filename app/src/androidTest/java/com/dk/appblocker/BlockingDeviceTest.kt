@@ -123,6 +123,21 @@ class BlockingDeviceTest {
         assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 5000))
         assertFalse(device.hasObject(By.text("Blocked")))
     }
+    @Test fun focusExpiryReleasesTheStillOpenAppWithoutAnyWindowSwitch() {
+        assertEquals(FocusStartResult.STARTED, Prefs.startFocusSession(context, setOf(fixturePackage), 12_000))
+        openFixture(); assertTrue(blocked())
+        assertTrue("Expired focus must dismiss its block screen", device.wait(Until.gone(By.text("Blocked")), 18_000))
+        assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 5000))
+        assertNull(Prefs.focusSession(context))
+    }
+    @Test fun focusExpiryCannotReleaseAnIndependentManualBlock() {
+        configure(false)
+        assertEquals(FocusStartResult.STARTED, Prefs.startFocusSession(context, setOf(fixturePackage), 1000))
+        Thread.sleep(1200)
+        assertNull(Prefs.focusSession(context))
+        openFixture(); assertTrue(blocked())
+        assertNotNull(RuleEngine.shouldBlock(context, fixturePackage).plan)
+    }
     @Test fun individualStrictRuleRequiresPasswordWithGlobalStrictModeOff() {
         Prefs.replacePin(context, "", "audit-password")
         Prefs.savePlans(context, listOf(BlockPlan(triggerType = TriggerType.MANUAL, packages = listOf(fixturePackage),

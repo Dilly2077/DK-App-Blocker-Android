@@ -33,6 +33,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -126,14 +127,7 @@ private fun AppRoot() {
     var tab by remember { mutableStateOf(MainTab.HOME) }
     var plans by remember { mutableStateOf(Prefs.getPlans(context).toList()) }
     var editing by remember { mutableStateOf<BlockPlan?>(null) }
-    var tick by remember { mutableLongStateOf(System.currentTimeMillis()) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(1000)
-            tick = System.currentTimeMillis()
-        }
-    }
+    val tick = rememberVisibleTick()
 
     BackHandler(enabled = route != Route.MAIN || tab != MainTab.HOME) {
         when (route) {
@@ -277,11 +271,7 @@ private fun HomeScreen(
     val activePlans by produceState(emptyList<BlockPlan>(), plans, tick / 30_000L) {
         value = withContext(Dispatchers.Default) { plans.filter { it.enabled && RuleEngine.isPlanActive(context, it) } }
     }
-    var showFocusApps by remember { mutableStateOf(false) }
-    var focusApps by remember { mutableStateOf(Prefs.focusPackages(context)) }
-    val focusRemaining = (Prefs.focusEnd(context) - tick).coerceAtLeast(0L)
-    if (showFocusApps) AppPickerDialog(focusApps, { showFocusApps = false }) { focusApps = it; showFocusApps = false }
-    val accessReady = remember(tick / 3000L) { isAccessibilityEnabled(context) }
+    val permissions = rememberBlockingPermissions(tick)
     val greeting = remember {
         when (java.time.LocalTime.now().hour) {
             in 0..11 -> "Good morning,"
@@ -307,54 +297,145 @@ private fun HomeScreen(
                 }
             }
         }
-        if (!accessReady) {
-            item {
-                Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Color(0xFF17140C))) {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("🛡️ Finish blocking setup", fontWeight = FontWeight.Bold)
-                        Text("Android Accessibility access is what lets DK App Blocker put the blocking screen over selected apps.", color = Muted, fontSize = 12.sp)
-                        Button(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Enable blocking") }
-                    }
-                }
-            }
+        if (!permissions.accessibility || !permissions.usage) item(key = "home.setup") { BlockingSetupStatus(permissions) }
+        item(key = "home.quickFocus") {
+            QuickFocusCard(tick, permissions.accessibility, onStrict)
         }
-        item {
-            GlowCard(onClick = onCreateRule) {
-                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Focus Mode", fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(9.dp).background(Green, CircleShape))
-                            Spacer(Modifier.width(7.dp))
-                            Text(if (activePlans.isNotEmpty()) "Active" else "Ready", color = Green, fontWeight = FontWeight.SemiBold)
-                        }
-                        Text("Blocking distractions across your device", color = Muted, fontSize = 13.sp)
-                    }
-                    FocusRing(if (activePlans.isNotEmpty()) 1f else .78f)
-                    Icon(Icons.Rounded.ChevronRight, null)
-                }
-            }
-        }
-        item {
-            LabeledCard("Quick focus", if (focusRemaining > 0) "${formatDuration(focusRemaining)} remaining" else "Choose distractions and start a timed session.") {
-                OutlinedButton(onClick = { showFocusApps = true }) { Text("Choose apps (${focusApps.size})") }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(25, 45, 60).forEach { minutes ->
-                        Button(onClick = { if (Prefs.canEditRules(context)) Prefs.startFocus(context, focusApps, minutes) else onStrict() }, enabled = focusApps.isNotEmpty()) { Text("${minutes}m") }
-                    }
-                }
-                if (focusRemaining > 0) TextButton(onClick = { if (Prefs.canEditRules(context)) Prefs.stopFocus(context) else onStrict() }) { Text("End focus session") }
-            }
-        }
-        item {
+        item(key = "home.rulesTitle") {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("Active Rules", fontWeight = FontWeight.Bold, fontSize = 18.sp, modifier = Modifier.weight(1f))
                 TextButton(onClick = onCreateRule) { Text("See all", color = Green) }
             }
         }
-        if (plans.isEmpty()) item { EmptyRuleCard(onCreateRule) }
-        else items(plans.take(5), key = { it.id }) { plan ->
+        if (plans.isEmpty()) item(key = "home.emptyRules") { EmptyRuleCard(onCreateRule) }
+        else items(plans.take(5), key = { "home.rule:${it.id}" }) { plan ->
                 HomeRuleRow(plan, plan in activePlans) { onEdit(plan) }
+        }
+    }
+}
+
+@Composable
+internal fun BlockingSetupStatus(permissions: BlockingPermissions) {
+    val context = LocalContext.current
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (!permissions.accessibility) {
+            Card(Modifier.testTag("blockingSetupBanner"), shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF17140C))) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("🛡️ Finish blocking setup", fontWeight = FontWeight.Bold)
+                    Text("Enable Android Accessibility access to enforce app blocks.", color = Muted, fontSize = 12.sp)
+                    Button(onClick = { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }) { Text("Enable blocking") }
+                }
+            }
+        }
+        if (!permissions.usage) {
+            OutlinedCard(Modifier.testTag("usageSetupBanner")) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Usage Access needed for daily limits", fontWeight = FontWeight.SemiBold)
+                    Text("Usage statistics and daily-limit rules need this separate permission.", color = Muted, fontSize = 12.sp)
+                    TextButton(onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }) { Text("Enable Usage Access") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun QuickFocusCard(tick: Long, accessibility: Boolean, onStrict: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var revision by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    val session = remember(tick, revision) { Prefs.focusSession(context) }
+    val elapsed = android.os.SystemClock.elapsedRealtime()
+    val boot = Prefs.boot(context)
+    val left = session?.remaining(elapsed, boot) ?: 0L
+    val progress = session?.progress(elapsed, boot) ?: 0f
+    var hours by rememberSaveable { mutableStateOf("0") }
+    var minutes by rememberSaveable { mutableStateOf("25") }
+    var selection by remember { mutableStateOf(Prefs.focusSelection(context)) }
+    var showApps by remember { mutableStateOf(false) }
+    val duration = focusDurationMillis(hours, minutes)
+    if (showApps) AppPickerDialog(selection, { showApps = false }) { chosen ->
+        showApps = false
+        scope.launch {
+            busy = true
+            val saved = withContext(Dispatchers.IO) { Prefs.saveFocusSelection(context, chosen) }
+            if (saved) selection = chosen else error = "Could not save app selection. Please retry."
+            busy = false
+        }
+    }
+    LabeledCard("Quick focus", if (session != null) "Current session" else "Choose distractions and a custom duration.") {
+        if (session != null) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text(formatFocusCountdown(left), color = Green, fontWeight = FontWeight.Bold, fontSize = 28.sp,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, modifier = Modifier.testTag("focusCountdown"))
+                    Text("${(progress * 100).toInt()}% complete", color = Muted)
+                }
+                FocusRing(progress)
+            }
+            LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().testTag("focusProgress"), color = Green, trackColor = Line)
+            Text("${session.packages.size} ${if (session.packages.size == 1) "app" else "apps"} in this session", fontWeight = FontWeight.SemiBold)
+            FocusAppList(session.packages)
+            Text(if (accessibility) "Accessibility enabled for blocking." else "Accessibility is off. Enable blocking above; the timer continues.",
+                color = if (accessibility) Muted else Danger, fontSize = 12.sp)
+            Text("End this session before changing its apps or duration. Independent rules still apply afterwards.", color = Muted, fontSize = 12.sp)
+            Button(enabled = !busy, onClick = {
+                if (!Prefs.canEditRules(context)) onStrict() else scope.launch {
+                    busy = true
+                    val saved = withContext(Dispatchers.IO) { Prefs.stopFocus(context) }
+                    if (!saved) error = "Could not end focus. Check Strict Mode or retry saving."
+                    revision++; busy = false
+                }
+            }, modifier = Modifier.fillMaxWidth().testTag("endFocus")) { Text("End Focus") }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(hours, { hours = it; error = null }, label = { Text("Hours") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), isError = duration == null,
+                    modifier = Modifier.weight(1f).testTag("focusHours"))
+                OutlinedTextField(minutes, { minutes = it; error = null }, label = { Text("Minutes") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), isError = duration == null,
+                    modifier = Modifier.weight(1f).testTag("focusMinutes"))
+            }
+            if (duration == null) Text("Enter a positive duration using whole numbers within the supported numeric range.", color = Danger, fontSize = 12.sp)
+            else Text("Duration: ${formatFocusCountdown(duration)} · hours may exceed 24", color = Muted, fontSize = 12.sp)
+            OutlinedButton(enabled = !busy, onClick = { showApps = true }) { Text("Choose apps (${selection.size})") }
+            FocusAppList(selection)
+            Button(enabled = !busy && selection.isNotEmpty() && duration != null, onClick = {
+                if (!Prefs.canEditRules(context)) onStrict() else scope.launch {
+                    busy = true
+                    val result = withContext(Dispatchers.IO) { Prefs.startFocusSession(context, selection, duration ?: 0L) }
+                    error = when (result) {
+                        FocusStartResult.STARTED -> null
+                        FocusStartResult.ALREADY_ACTIVE -> "A session is already running. End it before starting another."
+                        FocusStartResult.INVALID_DURATION -> "Duration is too large or invalid. Choose a shorter duration."
+                        FocusStartResult.NO_APPS -> "Choose at least one app. Recovery apps cannot be blocked."
+                        FocusStartResult.LOCKED -> "Strict Mode currently prevents starting focus."
+                        FocusStartResult.STORAGE_ERROR -> "Could not save the session. Please retry."
+                    }
+                    revision++; busy = false
+                }
+            }, modifier = Modifier.fillMaxWidth().testTag("startFocus")) { Text(if (busy) "Saving…" else "Start Focus") }
+        }
+        error?.let { Text(it, color = Danger, fontSize = 12.sp) }
+    }
+}
+
+@Composable
+private fun FocusAppList(packages: Set<String>) {
+    val context = LocalContext.current
+    val labels = remember(packages) {
+        packages.sorted().map { pkg ->
+            val label = runCatching { context.packageManager.getApplicationLabel(context.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrDefault(pkg)
+            label to pkg
+        }
+    }
+    labels.forEach { (label, pkg) ->
+        Column(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+            Text(label, fontSize = 13.sp)
+            if (label != pkg) Text(pkg, color = Muted, fontSize = 11.sp)
         }
     }
 }
@@ -376,7 +457,7 @@ private fun FocusRing(progress: Float) {
             val stroke = 9.dp.toPx()
             val arcSize = Size(size.width - stroke, size.height - stroke)
             drawArc(Color(0xFF123C28), -90f, 360f, false, Offset(stroke / 2, stroke / 2), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
-            drawArc(Brush.sweepGradient(listOf(Green2, Green, Green2)), -90f, 360f * progress.coerceIn(.08f, 1f), false, Offset(stroke / 2, stroke / 2), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
+            drawArc(Brush.sweepGradient(listOf(Green2, Green, Green2)), -90f, 360f * progress.coerceIn(0f, 1f), false, Offset(stroke / 2, stroke / 2), arcSize, style = Stroke(stroke, cap = StrokeCap.Round))
         }
         Text("🍃", fontSize = 28.sp)
     }
@@ -903,7 +984,7 @@ private fun PasswordUnlockDialog(onDismiss: () -> Unit, onSuccess: () -> Unit) {
 private fun InsightsScreen(tick: Long) {
     val context = LocalContext.current
     var selectedDays by remember { mutableIntStateOf(1) }
-    val hasAccess = remember(tick / 5000L) { hasUsageAccess(context) }
+    val hasAccess = rememberBlockingPermissions(tick).usage
     val start = remember(selectedDays, tick / 60_000L) { LocalDate.now().minusDays((selectedDays - 1).toLong()).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() }
     val usage by produceState(emptyList<UsageRow>(), selectedDays, tick / 60_000L, hasAccess) {
         value = withContext(Dispatchers.Default) { if (hasAccess) RuleEngine.topUsage(context, start, tick) else emptyList() }
@@ -964,10 +1045,11 @@ private fun UsageRowCard(row: UsageRow, total: Long) {
 @Composable
 private fun ProfileScreen(tick: Long, onStrict: () -> Unit) {
     val context = LocalContext.current
-    val accessibility = remember(tick / 3000L) { isAccessibilityEnabled(context) }
-    val usage = remember(tick / 3000L) { hasUsageAccess(context) }
-    val fine = remember(tick / 3000L) { ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED }
-    val admin = remember(tick / 3000L) { isDeviceAdminActive(context) }
+    val permissions = rememberBlockingPermissions(tick)
+    val accessibility = permissions.accessibility
+    val usage = permissions.usage
+    val fine = remember(tick) { ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED }
+    val admin = remember(tick) { isDeviceAdminActive(context) }
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { GeofenceManager.sync(context) }
     var pendingSettings by remember { mutableStateOf<Intent?>(null) }
     fun openSettings(intent: Intent) {
@@ -981,7 +1063,7 @@ private fun ProfileScreen(tick: Long, onStrict: () -> Unit) {
             dismissButton = { TextButton(onClick = { pendingSettings = null }) { Text("Cancel") } })
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(14.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        item { Box(Modifier.size(90.dp).background(Color(0xFF174F2E), CircleShape), contentAlignment = Alignment.Center) { Text("D", fontSize = 48.sp) }; Text("DK", fontSize = 30.sp); Text("All features unlocked", color = Green, fontSize = 12.sp) }
+        item { Box(Modifier.size(90.dp).background(Color(0xFF174F2E), CircleShape), contentAlignment = Alignment.Center) { Text("D", fontSize = 48.sp) }; Text("DK", fontSize = 30.sp); Text("Local tools, no subscription", color = Green, fontSize = 12.sp) }
         item { SettingCard("🎨", "Blocked screen", "Change colours, heading and message") { context.startActivity(Intent(context, BlockScreenSettingsActivity::class.java)) } }
         item { SettingCard("🔒", "Strict Mode", if (Prefs.getStrict(context).enabled) "Active" else "Configure advanced protections", onStrict) }
         item { PermissionStatusRow("🛡️", "Accessibility", accessibility, "Needed to enforce app blocking") { openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
