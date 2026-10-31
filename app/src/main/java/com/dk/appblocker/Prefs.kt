@@ -23,6 +23,11 @@ object Prefs {
 
     private fun p(context: Context) = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
+    fun observePolicy(context: Context, listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) =
+        p(context).registerOnSharedPreferenceChangeListener(listener)
+    fun stopObservingPolicy(context: Context, listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener) =
+        p(context).unregisterOnSharedPreferenceChangeListener(listener)
+
     // SharedPreferences updates its memory cache even when commit() returns false. Restore only
     // affected keys under this lock so enforcement/UI cannot observe an unconfirmed policy change.
     @Synchronized
@@ -87,7 +92,7 @@ object Prefs {
             pinHash = parsed.pinHash ?: "",
             editCooldownMinutes = parsed.editCooldownMinutes.coerceIn(0, 60),
             blockRuleChanges = if (json.contains("blockRuleChanges")) parsed.blockRuleChanges else true,
-            preventUninstall = if (json.contains("preventUninstall")) parsed.preventUninstall else true,
+            preventUninstall = if (json.contains("preventUninstall")) parsed.preventUninstall else false,
             blockDeviceSettings = if (json.contains("blockDeviceSettings")) parsed.blockDeviceSettings else true,
             blockRecents = if (json.contains("blockRecents")) parsed.blockRecents else true,
             blockSplitScreen = if (json.contains("blockSplitScreen")) parsed.blockSplitScreen else true,

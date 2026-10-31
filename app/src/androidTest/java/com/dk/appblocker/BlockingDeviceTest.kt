@@ -59,6 +59,10 @@ class BlockingDeviceTest {
     }
     private fun openFixture(keyboard: Boolean = false) { shell("am start -W -n $fixturePackage/com.dk.appblocker.FixtureActivity --ez keyboard $keyboard") }
     private fun blocked() = device.wait(Until.hasObject(By.text("Blocked")), 8000)
+    private fun reviewBlock() {
+        if (device.hasObject(By.text("Review block"))) device.findObject(By.text("Review block")).click()
+        assertTrue(device.wait(Until.hasObject(By.text("Take a 5-minute break")), 5000))
+    }
 
     @Test fun realExternalAppBlocksAndBackAndHomeEscapeWithoutTrapping() {
         configure(); openFixture(); assertTrue("Block screen did not launch", blocked())
@@ -97,6 +101,7 @@ class BlockingDeviceTest {
     }
     @Test fun breaksAndExpiredBreaksAreEnforcedWhileAppStaysOpen() {
         configure(true); openFixture(); assertTrue(blocked())
+        reviewBlock()
         device.findObject(By.text("Take a 5-minute break")).click()
         assertTrue(device.wait(Until.hasObject(By.text("Fixture distraction")), 5000))
         Prefs.allowPackageUntil(context, fixturePackage, System.currentTimeMillis() + 1200, Prefs.allowedPolicy(context, fixturePackage))
@@ -144,6 +149,7 @@ class BlockingDeviceTest {
             manualActive = true, strict = true, allowBreaks = true)))
         assertFalse(Prefs.getStrict(context).enabled)
         openFixture(); assertTrue(blocked())
+        reviewBlock()
         device.findObject(By.text("Take a 5-minute break")).click()
         assertTrue(device.wait(Until.hasObject(By.text("Verify Strict Mode")), 3000))
         device.findObject(By.clazz("android.widget.EditText")).text = "wrong"

@@ -13,6 +13,9 @@ object RuleEngine {
     data class Match(val blocked: Boolean, val reason: String = "", val plan: BlockPlan? = null,
         val strict: Boolean = false, val allowBreaks: Boolean = true, val policyToken: String = "")
 
+    fun selectedPackages(context: Context): Set<String> = MonitoringPolicy.targets(Prefs.getPlans(context),
+        Prefs.focusSession(context)?.packages.orEmpty(), recoveryPackages(context))
+
     fun shouldBlock(context: Context, packageName: String): Match {
         if (isRecoveryPackage(context, packageName)) return Match(false)
 
@@ -20,6 +23,7 @@ object RuleEngine {
         val session = Prefs.focusSession(context)
         val focus = session != null && packageName in session.packages
         val plans = Prefs.getPlans(context).filter { it.enabled && packageName in it.packages && isPlanActive(context, it) }
+        if (plans.isEmpty() && !focus) return Match(false)
         val match = BlockingPolicy.combine(plans, focus)
         val strict = Prefs.getStrict(context)
         val token = com.google.gson.Gson().toJson(plans.sortedBy { it.id }) +
@@ -39,13 +43,16 @@ object RuleEngine {
         if (packages.isEmpty()) return 0L
         if (!hasUsageAccess(context)) { usageSamples.invalidate(); return 0L }
         val start = startOfTodayMillis()
-        val sample = usageSamples.get("${context.packageName}:$start:${Prefs.boot(context)}", SystemClock.elapsedRealtime()) {
-            usageTotals(context, start, System.currentTimeMillis())
+        val selected = (Prefs.getPlans(context).filter { it.enabled && it.triggerType == TriggerType.DAILY_LIMIT }
+            .flatMap { it.packages } + packages).toSet()
+        val key = com.google.gson.Gson().toJson(selected.sorted())
+        val sample = usageSamples.get("${context.packageName}:$start:${Prefs.boot(context)}:$key", SystemClock.elapsedRealtime()) {
+            usageTotals(context, start, System.currentTimeMillis(), selected)
         }
         return sample.filterKeys { it in packages }.values.sum()
     }
 
-    private fun usageTotals(context: Context, start: Long, end: Long): Map<String, Long> = runCatching {
+    private fun usageTotals(context: Context, start: Long, end: Long, selected: Set<String>): Map<String, Long> = runCatching {
         val manager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         // Include yesterday to seed sessions spanning midnight. Android retains only a few days of events.
         val events = manager.queryEvents((start - 24 * 60 * 60_000L).coerceAtLeast(0), end)
@@ -54,11 +61,15 @@ object RuleEngine {
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             when (event.eventType) {
-                UsageEvents.Event.MOVE_TO_FOREGROUND, UsageEvents.Event.MOVE_TO_BACKGROUND ->
-                    transitions += UsageAccumulator.Transition(event.packageName.orEmpty(), event.className.orEmpty(), event.timeStamp, event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND)
+                UsageEvents.Event.MOVE_TO_FOREGROUND, UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                    val pkg = event.packageName.orEmpty()
+                    if (pkg in selected) transitions += UsageAccumulator.Transition(pkg, event.className.orEmpty(), event.timeStamp, event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND)
+                    else if (Build.VERSION.SDK_INT < 29 && event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND)
+                        transitions += UsageAccumulator.Transition("", "", event.timeStamp, false) // Identity-free selected-session boundary.
+                }
                 UsageEvents.Event.SCREEN_NON_INTERACTIVE, UsageEvents.Event.DEVICE_SHUTDOWN ->
                     transitions += UsageAccumulator.Transition("", "", event.timeStamp, false)
-                UsageEvents.Event.ACTIVITY_STOPPED -> transitions += UsageAccumulator.Transition(
+                UsageEvents.Event.ACTIVITY_STOPPED -> if (event.packageName in selected) transitions += UsageAccumulator.Transition(
                     event.packageName.orEmpty(), event.className.orEmpty(), event.timeStamp, false)
             }
         }

@@ -70,6 +70,15 @@ fun homePackages(context: Context): Set<String> = context.packageManager.queryIn
     Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), PackageManager.MATCH_DEFAULT_ONLY
 ).map { it.activityInfo.packageName }.toSet()
 
+fun recoveryPackages(context: Context): Set<String> = setOf(context.packageName, "android", "com.android.systemui", "com.android.settings",
+    "com.android.permissioncontroller", "com.google.android.permissioncontroller", "com.android.packageinstaller",
+    "com.google.android.packageinstaller", "com.android.emergency", "com.android.phone", "com.android.server.telecom",
+    "com.android.dialer", "com.google.android.dialer") + homePackages(context) +
+    listOf(Intent(Settings.ACTION_SETTINGS), Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), Intent(Intent.ACTION_DIAL),
+        Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)).mapNotNull {
+        context.packageManager.resolveActivity(it, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+    }
+
 fun isRecoveryPackage(context: Context, pkg: String): Boolean {
     if (pkg == context.packageName || pkg in setOf("android", "com.android.systemui", "com.android.settings",
             "com.android.permissioncontroller", "com.google.android.permissioncontroller",

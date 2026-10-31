@@ -18,10 +18,12 @@ class PaneBlockOverlay(private val service: AccessibilityService) {
     private val manager = service.getSystemService(WindowManager::class.java)
     private val views = mutableMapOf<String, Pair<View, Pane>>()
 
-    fun update(panes: List<Pane>, onReview: (String) -> Unit, onHome: () -> Unit) {
+    fun update(panes: List<Pane>, allowedPackages: Set<String>, onReview: (String) -> Unit, onHome: () -> Unit): Set<String> {
         val appearance = Prefs.getBlockScreen(service)
         val appearanceKey = appearance.toString()
-        val wanted = panes.associateBy { "${it.key}:$appearanceKey" }
+        val selected = allowedPackages.intersect(RuleEngine.selectedPackages(service))
+        val wanted = panes.filter { it.pkg in selected && it.bounds.width > 0 && it.bounds.height > 0 }
+            .associateBy { "${it.key}:$appearanceKey" }
         (views.keys - wanted.keys).forEach(::remove)
         wanted.forEach { (key, pane) ->
             if (views[key]?.second == pane) return@forEach
@@ -63,7 +65,7 @@ class PaneBlockOverlay(private val service: AccessibilityService) {
             val params = WindowManager.LayoutParams(bounds.width, bounds.height,
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.OPAQUE).apply {
                 gravity = Gravity.TOP or Gravity.LEFT
                 x = bounds.left; y = bounds.top
@@ -72,6 +74,7 @@ class PaneBlockOverlay(private val service: AccessibilityService) {
             }
             if (runCatching { manager.addView(view, params) }.isSuccess) views[key] = view to pane
         }
+        return views.values.map { it.second.pkg }.toSet()
     }
 
     private fun dp(value: Int) = (value * service.resources.displayMetrics.density).toInt()

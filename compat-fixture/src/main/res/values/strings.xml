@@ -1,0 +1,6 @@
+<resources>
+    <string name="social_title">Distraction fixture</string>
+    <string name="finance_title">Private finance fixture</string>
+    <string name="synthetic_hint">Synthetic account field</string>
+    <string name="synthetic_value">FAKE-ACCOUNT-DO-NOT-COLLECT</string>
+</resources>

@@ -31,7 +31,7 @@ data class StrictSettings(
     val pinHash: String = "",
     val editCooldownMinutes: Int = 0,
     val blockRuleChanges: Boolean = true,
-    val preventUninstall: Boolean = true,
+    val preventUninstall: Boolean = false,
     val blockDeviceSettings: Boolean = true,
     val blockRecents: Boolean = true,
     val blockSplitScreen: Boolean = true,

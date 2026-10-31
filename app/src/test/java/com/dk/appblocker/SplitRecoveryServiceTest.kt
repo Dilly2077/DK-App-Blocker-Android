@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.os.PowerManager
 import android.app.KeyguardManager
-import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import android.view.inspector.WindowInspector
 import kotlinx.coroutines.runBlocking
@@ -19,6 +19,13 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class SplitRecoveryServiceTest {
+    private fun observe(service: BlockAccessibilityService, pkg: String, id: Int) {
+        runBlocking { service.refreshMonitoring() }
+        val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+        event.packageName = pkg
+        org.robolectric.util.ReflectionHelpers.setField(event, "mSourceWindowId", id)
+        service.onAccessibilityEvent(event)
+    }
     @Test fun focusExpiryRemovesAnOverlayWithoutWindowChangesButKeepsIndependentBlocks() {
         val controller = Robolectric.buildService(BlockAccessibilityService::class.java).create()
         val service = controller.get()
@@ -30,18 +37,19 @@ class SplitRecoveryServiceTest {
                 shadowOf(it).apply {
                     setId(id); setType(AccessibilityWindowInfo.TYPE_APPLICATION); setBoundsInScreen(Rect(0, top, 320, bottom))
                     setFocused(focused); setActive(focused)
-                    setRoot(AccessibilityNodeInfo.obtain().apply { packageName = pkg })
                 }
             }
             val pkg = "example.blocked"
             shadowOf(service).setWindows(listOf(window(1, "com.android.settings", 0, 220, true), window(2, pkg, 230, 470, false)))
             fun overlays() = WindowInspector.getGlobalWindowViews().count { it.contentDescription == "DK blocked pane" }
             Prefs.startFocusSession(service, setOf(pkg), 1000)
+            observe(service, pkg, 2)
             runBlocking { service.checkVisibleWindows() }; assertEquals(1, overlays())
             org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(1))
             runBlocking { service.checkVisibleWindows() }; assertEquals(0, overlays())
             Prefs.startFocusSession(service, setOf(pkg), 1000)
             Prefs.savePlans(service, listOf(BlockPlan(triggerType = TriggerType.MANUAL, packages = listOf(pkg), manualActive = true)))
+            observe(service, pkg, 2)
             runBlocking { service.checkVisibleWindows() }; assertEquals(1, overlays())
             org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofSeconds(1))
             runBlocking { service.checkVisibleWindows() }; assertEquals(1, overlays())
@@ -61,12 +69,12 @@ class SplitRecoveryServiceTest {
                     shadowOf(info).apply {
                         setId(id); setType(AccessibilityWindowInfo.TYPE_APPLICATION); setBoundsInScreen(bounds)
                         setFocused(focused); setActive(focused)
-                        setRoot(AccessibilityNodeInfo.obtain().apply { packageName = pkg })
                     }
                 }
             val settings = window(1, "com.android.settings", Rect(0, 0, 320, 220), true)
             val blocked = window(2, "com.example.blocked", Rect(0, 230, 320, 470), false)
             shadowOf(service).setWindows(listOf(settings, blocked))
+            observe(service, "com.example.blocked", 2)
             runBlocking { service.checkVisibleWindows() }
             val overlays = WindowInspector.getGlobalWindowViews().filter { it.contentDescription == "DK blocked pane" }
             assertEquals("Settings focus must not suppress the blocked-pane overlay", 1, overlays.size)

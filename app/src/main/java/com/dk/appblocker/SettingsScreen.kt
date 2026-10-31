@@ -59,7 +59,7 @@ internal fun SettingsScreen(tick: Long, onStrict: () -> Unit) {
         }, onStrict) }
         item { SectionLabel("Permissions") }
         item { PermissionStatusRow("🛡️", "Accessibility", permissions.accessibility,
-            if (permissions.operational) "Service connected · app blocking enabled" else "Required for blocking · service not connected") { openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
+            if (permissions.operational) "Connected · selected windows only" else "Required for blocking · service not connected") { openSettings(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) } }
         item { PermissionStatusRow("📊", "Usage Access", permissions.usage, "Only daily limits and screen-time insights") { openSettings(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) } }
         item { PermissionStatusRow("📍", "Precise location", fine, "Only location-based rules") {
             locationLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
@@ -84,8 +84,10 @@ internal fun SettingsScreen(tick: Long, onStrict: () -> Unit) {
             }
         } }
         item { SectionLabel("About") }
-        item { LabeledCard("DK App Blocker · 0.4.0", "Built for focus. Stored on your device.") {
+        item { LabeledCard("DK App Blocker · 0.5.0", "Built for focus. Stored on your device.") {
             Text("No accounts, advertisements or subscriptions. Rules, credentials, appearance and history remain local.", color = Muted, fontSize = 13.sp)
+            Text("Only selected app identities and window bounds are used for blocking. Screen content is never read. Some banks may still reject an enabled Accessibility service; compatibility cannot be guaranteed.", color = Muted, fontSize = 12.sp)
+            Text("After enabling the service or adding an already-open app, reopen that app to identify its window without reading its UI. Review block opens password and biometric break controls.", color = Muted, fontSize = 12.sp)
             Text("Device Administrator cannot prevent uninstalling. Android Settings, Home and emergency recovery stay reachable.", color = Muted, fontSize = 12.sp)
         } }
     }

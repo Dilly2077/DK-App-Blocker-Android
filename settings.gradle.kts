@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "DKAppBlocker"
 include(":app")
+include(":compat-fixture")

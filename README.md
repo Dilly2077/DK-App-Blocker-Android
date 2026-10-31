@@ -2,11 +2,13 @@
 
 A local-first Android app blocker with schedule, daily usage limit, location/geofence and manual blocking rules. It also includes focus sessions, local insights and a Strict Mode PIN.
 
-## Version 0.4.0
+## Version 0.5.0
 
-The 0.4.0 update adds a focus-first dashboard, rule filters and Edit/Duplicate/Delete menus, accurate protection status, durable Strict Mode drafts, safer location reconciliation, period-aware Insights and organised Settings. It preserves long Quick Focus sessions, existing rules, green/black styling and local data. See [0.4.0 changes and verification](RELEASE_NOTES_0.4.0.md). Builds and tests run locally; physical-device qualification remains pending.
+The 0.5.0 update replaces Accessibility root inspection with selected-package/window identities and bounded surfaces. Idle monitoring is restricted to selected packages; unrelated app content is never requested. This improves least-privilege behaviour without a Banking Mode or a bank-package whitelist. Android still requires a content-retrieval capability declaration for split-screen window bounds, so financial apps can still detect/refuse the service. See [exact changes, tests and limits](RELEASE_NOTES_0.5.0.md). The complete v0.4.0 UI, blocking features and local data are preserved. Builds run locally; real-bank and physical-device qualification remain pending.
 
 ### Previous audits
+
+The [0.4.0 update](RELEASE_NOTES_0.4.0.md) introduced the focus-first dashboard, rule management, durable Strict Mode drafts, safer geofence reconciliation and modular UI.
 
 The [0.3.1 update](RELEASE_NOTES_0.3.1.md) fixed the Accessibility setup banner and added custom hours/minutes, live countdowns, session apps and elapsed-time progress.
 
@@ -30,6 +32,8 @@ The [second-audit testing build](SECOND_AUDIT_RESULTS_0.3.0.md) keeps version 0.
 
 ## Android limitations
 
+Accessibility uses selected package/window identities and rectangles, never UI roots or text. After enabling/restarting the service or adding an already-visible app, reopen that app to provide a fresh window event. Unknown identities are not blindly covered. Automatic protection is bounded to selected panes; **Review block** opens authentication and break controls. Banks can still detect/refuse the enabled service and its window-access capability. There is no compatibility switch or security-check bypass.
+
 Quick Focus persists through navigation, screen locking and process restarts using a durable elapsed-time deadline. Changing the wall clock does not extend it. A reboot safely ends Quick Focus, temporary breaks and timer Strict Mode; independent persistent rules continue. The next-session app selection is retained. End an active session before changing its duration or apps; starting another cannot replace or extend it. Strict Mode restrictions still apply to manual start/end, while natural expiry always releases the temporary focus block.
 
 An existing 0.3.0 focus session is migrated without extending its deadline. Since 0.3.0 did not store its original duration, the progress baseline resets once to the remaining duration at upgrade. Accessibility permission and Usage Access are displayed separately; enabled permission alone is not proof of successful enforcement on every Android/OEM configuration.
@@ -40,7 +44,7 @@ Location rules require Location permission; for reliable background geofence tra
 
 ## Install / APK
 
-Builds run locally on the PC hosting this workspace. Download [0.4.0's locally built APK](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/download/v0.4.0-local/DK-App-Blocker-0.4.0-local.apk) from the [0.4.0 testing release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.4.0-local). Use `DK-App-Blocker-0.4.0-local.apk` for normal installation. That release also includes the unsigned release validation build, test/audit companion APKs, checksums, verification records and native-rendered UI previews. Device qualification remains pending. [0.3.1](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.1-local) and the older local builds remain available in Releases. Unsigned release APKs require signing; instrumentation APKs are not the normal app.
+Builds run locally on the PC hosting this workspace. Download [0.5.0's locally built APK](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/download/v0.5.0-local/DK-App-Blocker-0.5.0-local.apk) from the [0.5.0 testing release](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.5.0-local). Use `DK-App-Blocker-0.5.0-local.apk` for normal installation. Other assets include the unsigned release validation build, instrumentation/audit APKs, clearly labelled synthetic test fixtures, checksums and verification records. Fixture APKs are not banking applications. Real-bank and device qualification remain pending. [0.4.0](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.4.0-local), [0.3.1](https://github.com/Dilly2077/DK-App-Blocker-Android/releases/tag/v0.3.1-local) and older builds remain available. Unsigned release APKs require signing; instrumentation APKs are not the normal app.
 
 The signed debug APK can be sideloaded after enabling installation from the browser/file manager used to open it. Reuse the same local signing key for future compatible updates. A differently signed previous build can require uninstalling first, deleting its local data.
 
@@ -59,3 +63,5 @@ Automatic push and pull-request builds are disabled. The retained GitHub Actions
 All app data is stored locally in Android `SharedPreferences`; cloud backup and device transfer are disabled. Passwords use salted PBKDF2. Configuration export excludes credentials and history. The product has no Internet permission, analytics, advertising or account infrastructure. Location rules use the device's Google Play services location APIs.
 
 Build with JDK 17 and Android SDK 35: `./gradlew :app:assembleDebug :app:assembleRelease :app:assembleDebugAndroidTest :app:test :app:lint :app:lintRelease`. The release variant is unsigned; distribute the verified debug artifact for sideloading.
+
+Build the synthetic finance/social helpers locally with `:compat-fixture:assembleDebug`; lint each debug flavor with `:compat-fixture:lintFinanceOneDebug :compat-fixture:lintFinanceTwoDebug :compat-fixture:lintSocialDebug`. Later isolated device tests can use `scripts/device-tests.ps1 -FixtureDirectory compat-fixture/build/outputs/apk` along with its required SDK/APK/serial arguments. The runner validates all three package IDs before installing. These fixtures and unit tests do not establish compatibility with any real bank.

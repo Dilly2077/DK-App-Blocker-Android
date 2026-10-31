@@ -3,5 +3,5 @@
     <string name="review_block">Review block</string>
     <string name="review_blocked_pane">Review blocked pane</string>
     <string name="go_home">Go home</string>
-    <string name="accessibility_description">Blocks selected apps when your schedules, limits, focus sessions or location rules are active.</string>
+    <string name="accessibility_description">Blocks only selected apps using package/window IDs and bounded surfaces. Does not read screen text, fields or account details. Window-bound access is retained for split-screen protection. Android and financial apps can still detect and restrict this enabled service.</string>
 </resources>

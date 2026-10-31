@@ -32,7 +32,7 @@ class UsageProfileTest {
         assertTrue("Each rule must not query usage history separately", loads <= elapsed / 5000 + 2)
         java.io.File(context.getExternalFilesDir(null), "usage-profile.txt").writeText(
             "20 decisions x 20 daily-limit rules\nElapsed ms=$elapsed\nTest-thread CPU ms=${cpu / 1_000_000}\nOS usage queries=$loads\n" +
-                "Service idle scan interval=2000 ms; usage sample TTL=5000 ms. This is a CPU/query profile, not a physical battery-life measurement.\n")
+                "Policy tick=2000 ms; window geometry only with tracked selected targets; usage sample TTL=5000 ms. This is a CPU/query profile, not a physical battery-life measurement.\n")
         } finally {
             context.getSharedPreferences("dk_blocker_prefs", 0).edit().clear().commit()
             if (!hadAccess) instrumentation.getUiAutomation(UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES)

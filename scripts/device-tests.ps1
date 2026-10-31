@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Serial,
     [string]$ApplicationId = 'com.dk.appblocker.audit',
     [string]$ResultsDirectory = 'dist/device-results',
+    [string]$FixtureDirectory,
     [switch]$AllowEmulatorReboot,
     [switch]$VerifyPackagesOnly
 )
@@ -28,6 +29,15 @@ function Apk-Package([string]$Path) {
 if ((Apk-Package $product.FullName) -cne $ApplicationId -or (Apk-Package $testApk.FullName) -cne "$ApplicationId.test") {
     throw 'APK package IDs do not match the requested isolated audit target. Nothing has been installed.'
 }
+$fixtures = @()
+if ($FixtureDirectory) {
+    $fixtures = @(Get-ChildItem -LiteralPath $FixtureDirectory -Recurse -Filter '*debug.apk')
+    $fixturePackages = @($fixtures | ForEach-Object { Apk-Package $_.FullName })
+    $expectedFixtures = @('com.dk.compatfixture.financeone','com.dk.compatfixture.financetwo','com.dk.compatfixture.social')
+    if ($fixtures.Count -ne 3 -or (Compare-Object ($fixturePackages | Sort-Object) ($expectedFixtures | Sort-Object))) {
+        throw 'Expected exactly the three local representative fixture packages; nothing installed.'
+    }
+}
 if ($VerifyPackagesOnly) { Write-Output "Verified isolated APK package IDs: $ApplicationId and $ApplicationId.test; no device changes made."; return }
 $emulator = (DeviceCommand shell getprop ro.kernel.qemu).Trim() -eq '1'
 if (!$emulator -and $ApplicationId -ne 'com.dk.appblocker.audit') {
@@ -45,6 +55,7 @@ function Run-Instrumentation {
 try {
     DeviceCommand install -r $product.FullName | Set-Content (Join-Path $ResultsDirectory 'install.txt')
     DeviceCommand install -r -t $testApk.FullName | Out-Null
+    foreach ($fixture in $fixtures) { DeviceCommand install -r $fixture.FullName | Out-Null }
     Run-Instrumentation 'instrumentation' @('-e','notClass','com.dk.appblocker.PersistenceDeviceTest,com.dk.appblocker.SaveDurabilityTest')
     foreach ($phase in @('rules','appearance','focus')) {
         $report = DeviceCommand shell am instrument -w -r -e class com.dk.appblocker.SaveDurabilityTest -e phase $phase $runner

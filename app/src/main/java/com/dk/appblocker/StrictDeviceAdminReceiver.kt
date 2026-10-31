@@ -9,7 +9,7 @@ class StrictDeviceAdminReceiver : DeviceAdminReceiver() {
         return if (Prefs.getStrict(context).enabled) {
             "Strict Mode is active. Removing administrator access is always allowed. You can also disable Accessibility or uninstall from Android Settings."
         } else {
-            "Disabling device administrator protection will allow DK App Blocker to be uninstalled normally."
+            "Administrator access is optional. Removing it leaves your rules and Strict Mode unchanged; uninstalling remains available in Android Settings."
         }
     }
 }
